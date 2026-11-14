@@ -56,6 +56,22 @@ const (
 	receiptPoll    = 500 * time.Millisecond
 )
 
+// mainnetChainID is the chain id of each mainnet.
+var mainnetChainID = map[string]int64{"ethereum": 1, "bsc": 56}
+
+// CheckChainID refuses a node of the other mainnet: chain id 1 when NETWORK is bsc, 56 when it is ethereum. A
+// payment signed there would go out on the wrong chain. Any other chain id is allowed, so test chains still work.
+func CheckChainID(network string, chainID *big.Int) error {
+	for other, id := range mainnetChainID {
+		if other != network && chainID.Cmp(big.NewInt(id)) == 0 {
+			return &autopay.ConfigError{
+				Message: fmt.Sprintf("EVM_RPC_URL is a %s node (chain id %s), but NETWORK is %s", other, chainID, network),
+			}
+		}
+	}
+	return nil
+}
+
 // EvmOptions configures an EvmPayer.
 type EvmOptions struct {
 	RPCURL     string
@@ -83,6 +99,20 @@ func NewEvmPayer(opts EvmOptions) (*EvmPayer, error) {
 
 // Address is the wallet's own address.
 func (p *EvmPayer) Address(context.Context) (string, error) { return p.address.Hex(), nil }
+
+// Check reads the node's chain id once at start, so a wrong node is refused before any payment is created.
+func (p *EvmPayer) Check(ctx context.Context) error {
+	client, err := ethclient.DialContext(ctx, p.opts.RPCURL)
+	if err != nil {
+		return fmt.Errorf("EVM RPC: %w", err)
+	}
+	defer client.Close()
+	chainID, err := client.ChainID(ctx)
+	if err != nil {
+		return fmt.Errorf("EVM RPC: %w", err)
+	}
+	return CheckChainID(p.opts.Network, chainID)
+}
 
 // TokenFor returns the token contract for a coin: "" for the chain's native coin, an error for an unknown token.
 func (p *EvmPayer) TokenFor(coin string) (string, error) {
@@ -143,7 +173,7 @@ func (p *EvmPayer) Send(ctx context.Context, to, coin, amount string) (string, e
 	if err := client.SendTransaction(ctx, tx); err != nil {
 		return "", fmt.Errorf("sending the transaction: %w", err)
 	}
-	receipt, err := waitForReceipt(ctx, client, tx.Hash())
+	receipt, err := waitForReceipt(ctx, client, tx.Hash(), receiptTimeout, receiptPoll)
 	if err != nil {
 		return "", err
 	}
@@ -181,6 +211,10 @@ func (p *EvmPayer) buildTx(
 	if err != nil {
 		return nil, fmt.Errorf("EVM RPC: %w", err)
 	}
+	// Checked again here: nothing is signed for the wrong chain, even if the node changed since the start.
+	if err := CheckChainID(p.opts.Network, chainID); err != nil {
+		return nil, err
+	}
 	nonce, err := client.PendingNonceAt(ctx, p.address)
 	if err != nil {
 		return nil, fmt.Errorf("reading the nonce: %w", err)
@@ -215,23 +249,35 @@ func (p *EvmPayer) buildTx(
 	return types.SignNewTx(p.key, types.LatestSignerForChainID(chainID), unsigned)
 }
 
-// waitForReceipt polls until the transaction is mined (one confirmation).
-func waitForReceipt(ctx context.Context, client *ethclient.Client, hash common.Hash) (*types.Receipt, error) {
-	ctx, cancel := context.WithTimeout(ctx, receiptTimeout)
+// receiptReader is the one call waitForReceipt makes, so tests can stand in for the node.
+type receiptReader interface {
+	TransactionReceipt(ctx context.Context, hash common.Hash) (*types.Receipt, error)
+}
+
+// waitForReceipt polls until the transaction is mined (one confirmation). RPC errors on the way are retried until
+// the timeout: the transaction is out, and only its receipt is missing.
+func waitForReceipt(
+	ctx context.Context, client receiptReader, hash common.Hash, timeout, poll time.Duration,
+) (*types.Receipt, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	ticker := time.NewTicker(receiptPoll)
+	ticker := time.NewTicker(poll)
 	defer ticker.Stop()
+	var lastErr error
 	for {
 		receipt, err := client.TransactionReceipt(ctx, hash)
 		if err == nil {
 			return receipt, nil
 		}
-		if !errors.Is(err, ethereum.NotFound) {
-			return nil, fmt.Errorf("waiting for %s: %w", hash.Hex(), err)
+		if !errors.Is(err, ethereum.NotFound) && ctx.Err() == nil {
+			lastErr = err
 		}
 		select {
 		case <-ctx.Done():
-			return nil, fmt.Errorf("waiting for %s: %w", hash.Hex(), ctx.Err())
+			if lastErr != nil {
+				return nil, fmt.Errorf("no receipt for %s after %s (last error: %w)", hash.Hex(), timeout, lastErr)
+			}
+			return nil, fmt.Errorf("no receipt for %s after %s", hash.Hex(), timeout)
 		case <-ticker.C:
 		}
 	}

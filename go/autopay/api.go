@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -85,11 +86,18 @@ func NewAPI(base, key string) *Client {
 
 // Balance is the account balance in USD.
 func (c *Client) Balance(ctx context.Context) (float64, error) {
-	var body struct {
-		Balance float64 `json:"balance"`
+	// A pointer, so that a missing balance is told apart from a zero one.
+	var body *struct {
+		Balance *float64 `json:"balance"`
 	}
-	err := c.request(ctx, http.MethodGet, "/balance", nil, true, &body)
-	return body.Balance, err
+	if err := c.request(ctx, http.MethodGet, "/balance", nil, true, &body); err != nil {
+		return 0, err
+	}
+	// A 2xx without a usable number is a glitch, never a zero balance.
+	if body == nil || body.Balance == nil || math.IsInf(*body.Balance, 0) || math.IsNaN(*body.Balance) {
+		return 0, &APIError{Status: http.StatusOK, Message: "GET /balance: the answer has no balance", Transient: true}
+	}
+	return *body.Balance, nil
 }
 
 // Methods lists the payment methods. It is public: sent without the key.

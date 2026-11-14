@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -80,6 +81,8 @@ type sentPayment struct{ to, coin, amount string }
 type fakePayer struct {
 	sent    []sentPayment
 	failure error
+	// afterSend, when set, runs once the payment is made.
+	afterSend func()
 }
 
 func (p *fakePayer) Address(context.Context) (string, error) { return "0xwallet", nil }
@@ -89,6 +92,9 @@ func (p *fakePayer) Send(_ context.Context, to, coin, amount string) (string, er
 		return "", p.failure
 	}
 	p.sent = append(p.sent, sentPayment{to, coin, amount})
+	if p.afterSend != nil {
+		p.afterSend()
+	}
 	return "0xtxid", nil
 }
 
@@ -580,6 +586,66 @@ func TestWatchStopsWith0WhenAskedTo(t *testing.T) {
 		func() time.Duration { return 60 * time.Second })
 	if err != nil || code != 0 || runs != 1 {
 		t.Fatalf("code %d, err %v, runs %d", code, err, runs)
+	}
+}
+
+func TestACreatedInvoiceForAnotherNetworkOrCoinThanTheConfigurationIsNeverPaid(t *testing.T) {
+	for _, other := range []func(*Topup){
+		func(r *Topup) { r.Network = "ethereum" },
+		func(r *Topup) { r.Coin = "USDC" },
+	} {
+		h := newHarness(t)
+		h.save(record(other))
+		_, err := h.run(h.config(nil))
+		if fatal := h.expectFatal(err); !strings.Contains(fatal.Message, "inv-1") {
+			t.Errorf("message = %q", fatal.Message)
+		}
+		if len(h.api.calls) != 0 || len(h.payer.sent) != 0 || h.topups()[0].Phase != "created" {
+			t.Errorf("calls %v, sent %v, record %+v", h.api.calls, h.payer.sent, h.topups()[0])
+		}
+	}
+}
+
+func TestTheTransactionIDIsLoggedEvenWhenTheSaveAfterTheSendFails(t *testing.T) {
+	h := newHarness(t)
+	// A directory where the temp file should go makes the save after the send fail.
+	h.payer.afterSend = func() {
+		if err := os.Mkdir(h.path+".tmp", 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := h.run(h.config(nil)); err == nil {
+		t.Fatal("the save did not fail")
+	}
+	if len(h.payer.sent) != 1 || !slices.Contains(h.lines, "sent 0xtxid") {
+		t.Errorf("sent %v, lines %v", h.payer.sent, h.lines)
+	}
+}
+
+func TestADepositStillNotCredited2HoursAfterTheSendNeedsAManualCheck(t *testing.T) {
+	h := newHarness(t)
+	cfg := depositConfig(h)
+	sent := func(sentAt int64) Topup {
+		return record(func(r *Topup) {
+			r.ID, r.Kind, r.Network, r.AmountCrypto, r.Address = "deposit:0xtxid", "deposit", "solana", "50", "SoLaddress"
+			r.ExpiresAt, r.Phase, r.Txid, r.SentAt = nil, "sent", ptr("0xtxid"), ptr(sentAt)
+		})
+	}
+	h.save(sent(nowMs() - 2*msHour))
+	h.expect(h.mustRun(cfg), Pending)
+
+	h.save(sent(nowMs() - 2*msHour - 1))
+	out := h.mustRun(cfg)
+	h.expect(out, ManualCheck)
+	if !regexp.MustCompile(`0xtxid.*2 hours`).MatchString(out.Reason) || h.topups()[0].Phase != "sent" {
+		t.Errorf("reason %q, record %+v", out.Reason, h.topups()[0])
+	}
+
+	// Credited late is still credited.
+	h.api.deposits = []DepositEntry{{TxHash: "0xtxid", Credited: true}}
+	h.expect(h.mustRun(cfg), Idle)
+	if rec := h.topups()[0]; rec.Result == nil || *rec.Result != "credited" {
+		t.Errorf("record = %+v", rec)
 	}
 }
 

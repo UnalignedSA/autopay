@@ -17,6 +17,8 @@ const (
 	day    = 24 * time.Hour
 	// minTimeLeft: an invoice with less time left than this is not paid, the payment could land after it expires.
 	minTimeLeft = 5 * minute
+	// depositCreditWait: a deposit not credited this long after the send needs a person to look at it.
+	depositCreditWait = 2 * time.Hour
 )
 
 // Payer sends crypto from the wallet. One implementation per chain family (package payers).
@@ -25,6 +27,12 @@ type Payer interface {
 	Address(ctx context.Context) (string, error)
 	// Send sends amount (a decimal string) of coin to the address and returns the transaction id.
 	Send(ctx context.Context, to, coin, amount string) (string, error)
+}
+
+// Checker is implemented by a Payer whose node is checked once, before any payment is created. Check returns
+// a *ConfigError when the node can never be right (an EVM node of the other mainnet).
+type Checker interface {
+	Check(ctx context.Context) error
 }
 
 // OutcomeKind says what one cycle did.
@@ -112,12 +120,18 @@ func cycle(
 		return manualCheck(out, "a send may or may not have gone out: check the wallet, then edit the state file"), nil
 	}
 	if open != nil && open.Phase == "sent" {
-		return follow(ctx, api, state, store, open, out)
+		return follow(ctx, api, state, store, open, now, out)
 	}
 
 	var topup *Topup
 	if open != nil {
-		// Created but not sent: the program stopped between the two.
+		// Created but not sent: the program stopped between the two. Never pay it with another wallet.
+		if open.Network != cfg.Network || open.Coin != cfg.Coin {
+			return Outcome{}, &FatalError{Message: fmt.Sprintf(
+				"invoice %s waits for %s on %s, but the configuration says %s on %s: "+
+					"set them back until it is done, or close it in the state file",
+				open.ID, open.Coin, open.Network, cfg.Coin, cfg.Network)}
+		}
 		invoice, err := api.GetPayment(ctx, open.ID)
 		if err != nil {
 			return Outcome{}, err
@@ -253,6 +267,8 @@ func send(
 			"the send failed (%v) but may have gone out: check the wallet, then edit the state file", err)), nil
 	}
 
+	// Logged before the save: if the save fails, the transaction id is still on screen.
+	out("sent " + txid)
 	sentAt := now().UnixMilli()
 	topup.Phase, topup.Txid, topup.SentAt = "sent", &txid, &sentAt
 	if topup.Kind == "deposit" {
@@ -261,12 +277,13 @@ func send(
 	if err := store.Save(state); err != nil {
 		return Outcome{}, err
 	}
-	out("sent " + txid)
 	return Outcome{Kind: Sent}, nil
 }
 
 // follow tracks a payment that was sent until the account is credited.
-func follow(ctx context.Context, api API, state *State, store *Store, topup *Topup, out func(string)) (Outcome, error) {
+func follow(
+	ctx context.Context, api API, state *State, store *Store, topup *Topup, now func() time.Time, out func(string),
+) (Outcome, error) {
 	if topup.Kind == "deposit" {
 		deposit, err := api.Deposit(ctx, topup.Network)
 		if err != nil {
@@ -276,6 +293,20 @@ func follow(ctx context.Context, api API, state *State, store *Store, topup *Top
 			if topup.Txid != nil && d.TxHash == *topup.Txid && d.Credited {
 				return Outcome{Kind: Idle}, finish(state, store, topup, "credited", out)
 			}
+		}
+		// A deposit is listed once its transaction is seen on chain. One still missing after hours was most
+		// likely dropped, or went somewhere else: waiting longer will not tell.
+		sentAt := topup.CreatedAt
+		if topup.SentAt != nil {
+			sentAt = *topup.SentAt
+		}
+		if now().Sub(time.UnixMilli(sentAt)) > depositCreditWait {
+			txid := ""
+			if topup.Txid != nil {
+				txid = *topup.Txid
+			}
+			return manualCheck(out, fmt.Sprintf("deposit %s is not credited 2 hours after the send: "+
+				"look the transaction up on chain, then edit the state file", txid)), nil
 		}
 		out(fmt.Sprintf("waiting %s (not credited yet)", topup.ID))
 		return Outcome{Kind: Pending}, nil

@@ -4,6 +4,9 @@ package payers
 
 import (
 	"errors"
+	"net"
+	"net/http"
+	"time"
 
 	"github.com/UnalignedCorp/unaligned-autopay/go/autopay"
 )
@@ -35,6 +38,14 @@ func MakePayer(network, tokenAddress string, env autopay.Env) (autopay.Payer, er
 	default: // bitcoin, litecoin
 		return NewUtxoPayer(env("WALLET_RPC_URL"), env("WALLET_RPC_USER"), env("WALLET_RPC_PASSWORD")), nil
 	}
+}
+
+// walletHTTP is the HTTP client for the wallet RPCs. Only connecting has a time limit: a wallet can take its time
+// to build and sign a transfer (Monero especially), and cutting the send short would leave it in doubt.
+func walletHTTP() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DialContext = (&net.Dialer{Timeout: 30 * time.Second}).DialContext
+	return &http.Client{Transport: transport}
 }
 
 // errNoAddress is what the wallets without a default refund address answer to Address.

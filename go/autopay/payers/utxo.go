@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"regexp"
-	"time"
 
 	"github.com/UnalignedCorp/unaligned-autopay/go/autopay"
 )
@@ -25,7 +24,7 @@ type UtxoPayer struct {
 
 // NewUtxoPayer builds the wallet client. The URL may include /wallet/<name>.
 func NewUtxoPayer(url, user, password string) *UtxoPayer {
-	return &UtxoPayer{url: url, user: user, password: password, client: &http.Client{Timeout: 60 * time.Second}}
+	return &UtxoPayer{url: url, user: user, password: password, client: walletHTTP()}
 }
 
 // Address is not used: the node's wallet holds the funds.

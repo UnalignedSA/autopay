@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"strings"
 	"time"
 
@@ -24,6 +25,7 @@ var solanaMints = map[string]string{
 const (
 	solDecimals         = 9
 	mintDecimalsOffset  = 44 // in the SPL mint layout (the same in Token-2022)
+	mintInitializedAt   = 45 // the is_initialized flag, right after the decimals
 	transferCheckedCode = 12 // instruction index in the token programs
 	confirmTimeout      = 90 * time.Second
 	confirmPoll         = 500 * time.Millisecond
@@ -53,6 +55,29 @@ func ParseSolanaKey(text string) (solana.PrivateKey, error) {
 		return nil, fmt.Errorf("SOLANA_PRIVATE_KEY is not a valid secret key: the public half does not match")
 	}
 	return key, nil
+}
+
+// ToU64 refuses an amount that does not fit in 64 bits, the size of Solana amounts, instead of cutting it down.
+func ToU64(units *big.Int) (uint64, error) {
+	if !units.IsUint64() {
+		return 0, fmt.Errorf("%s base units do not fit in 64 bits", units)
+	}
+	return units.Uint64(), nil
+}
+
+// CheckMint checks that an account is a token mint: owned by the Token or Token-2022 program, long enough and
+// initialized. It returns the program, which every token instruction for this mint goes to.
+func CheckMint(mintAddress string, owner solana.PublicKey, data []byte) (solana.PublicKey, error) {
+	if !owner.Equals(solana.TokenProgramID) && !owner.Equals(solana.Token2022ProgramID) {
+		return solana.PublicKey{}, fmt.Errorf("%s is not a token mint (its owner is %s)", mintAddress, owner)
+	}
+	if len(data) <= mintInitializedAt {
+		return solana.PublicKey{}, fmt.Errorf("%s is not a token mint", mintAddress)
+	}
+	if data[mintInitializedAt] != 1 {
+		return solana.PublicKey{}, fmt.Errorf("token mint %s is not initialized", mintAddress)
+	}
+	return owner, nil
 }
 
 // SolanaPayer pays SOL or an SPL token from one keypair.
@@ -106,11 +131,15 @@ func (p *SolanaPayer) Send(ctx context.Context, to, coin, amount string) (string
 		return "", err
 	}
 	if mintAddress == "" {
-		lamports, err := autopay.ToBaseUnits(amount, solDecimals)
+		units, err := autopay.ToBaseUnits(amount, solDecimals)
 		if err != nil {
 			return "", err
 		}
-		instructions = append(instructions, system.NewTransferInstruction(lamports.Uint64(), owner, recipient).Build())
+		lamports, err := ToU64(units)
+		if err != nil {
+			return "", err
+		}
+		instructions = append(instructions, system.NewTransferInstruction(lamports, owner, recipient).Build())
 	} else {
 		instructions, err = p.tokenTransfer(ctx, mintAddress, recipient, amount)
 		if err != nil {
@@ -156,14 +185,17 @@ func (p *SolanaPayer) tokenTransfer(
 	if err != nil || info == nil || info.Value == nil {
 		return nil, fmt.Errorf("token mint %s not found", mintAddress)
 	}
-	// The mint's owner is the token program (classic or Token-2022).
-	program := info.Value.Owner
 	data := info.Value.Data.GetBinary()
-	if len(data) <= mintDecimalsOffset {
-		return nil, fmt.Errorf("%s is not a token mint", mintAddress)
+	program, err := CheckMint(mintAddress, info.Value.Owner, data)
+	if err != nil {
+		return nil, err
 	}
 	decimals := data[mintDecimalsOffset]
 	units, err := autopay.ToBaseUnits(amount, int(decimals))
+	if err != nil {
+		return nil, err
+	}
+	value, err := ToU64(units)
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +216,7 @@ func (p *SolanaPayer) tokenTransfer(
 	// to work with Token-2022 mints too: [12, amount (u64 little endian), decimals].
 	payload := make([]byte, 10)
 	payload[0] = transferCheckedCode
-	binary.LittleEndian.PutUint64(payload[1:9], units.Uint64())
+	binary.LittleEndian.PutUint64(payload[1:9], value)
 	payload[9] = decimals
 	transfer := solana.NewInstruction(program, solana.AccountMetaSlice{
 		solana.Meta(from).WRITE(),

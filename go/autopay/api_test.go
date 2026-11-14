@@ -29,6 +29,13 @@ func apiServer(t *testing.T) (base string, lastAuth func() string) {
 			_, _ = w.Write([]byte(`{"balance"`))
 			w.(http.Flusher).Flush()
 			panic(http.ErrAbortHandler)
+		case strings.HasPrefix(path, "/odd/"):
+			// A 2xx body without a usable balance.
+			bodies := map[string]string{
+				"/odd/empty/balance": `{}`, "/odd/null/balance": `null`,
+				"/odd/text/balance": `{"balance":"12.5"}`, "/odd/infinite/balance": `{"balance":1e999}`,
+			}
+			_, _ = w.Write([]byte(bodies[path]))
 		case path == "/balance":
 			_, _ = w.Write([]byte(`{"balance": 12.5}`))
 		case path == "/payments/methods":
@@ -111,5 +118,19 @@ func TestARefusedConnectionIsATransientError(t *testing.T) {
 	_, err := NewAPI("http://127.0.0.1:1", "k").Balance(context.Background())
 	if apiErr := asAPIError(t, err); !apiErr.Transient {
 		t.Errorf("not transient: %+v", apiErr)
+	}
+}
+
+func TestA2xxBalanceWithoutAFiniteNumberIsATransientError(t *testing.T) {
+	base, _ := apiServer(t)
+	for _, odd := range []string{"empty", "null", "text", "infinite"} {
+		_, err := NewAPI(base+"/odd/"+odd, "k").Balance(context.Background())
+		if err == nil {
+			t.Errorf("%s: no error", odd)
+			continue
+		}
+		if apiErr := asAPIError(t, err); !apiErr.Transient {
+			t.Errorf("%s: not transient: %v", odd, err)
+		}
 	}
 }

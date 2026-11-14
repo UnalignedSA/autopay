@@ -12,7 +12,6 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/UnalignedCorp/unaligned-autopay/go/autopay"
 )
@@ -27,7 +26,7 @@ type MoneroPayer struct {
 
 // NewMoneroPayer builds the wallet client. user and password are optional.
 func NewMoneroPayer(url, user, password string) *MoneroPayer {
-	return &MoneroPayer{url: url, user: user, password: password, client: &http.Client{Timeout: 60 * time.Second}}
+	return &MoneroPayer{url: url, user: user, password: password, client: walletHTTP()}
 }
 
 // Address is not used: the wallet holds the funds.

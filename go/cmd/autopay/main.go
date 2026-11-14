@@ -53,6 +53,11 @@ func run() int {
 				autopay.Log("retry: " + apiErr.Message)
 				return autopay.Outcome{Kind: autopay.Retry, Reason: apiErr.Message}, nil
 			}
+			var unreachable *walletUnreachable
+			if errors.As(err, &unreachable) {
+				autopay.Log("retry: " + unreachable.Error())
+				return autopay.Outcome{Kind: autopay.Retry, Reason: unreachable.Error()}, nil
+			}
 			if err != nil {
 				return autopay.Outcome{}, err
 			}
@@ -90,6 +95,27 @@ func dispatch(
 	return 0, nil
 }
 
+// walletUnreachable: the wallet's node did not answer at start. Like the API being down, it is tried again on the
+// next tick.
+type walletUnreachable struct{ err error }
+
+func (e *walletUnreachable) Error() string { return e.err.Error() }
+
+// checkWallet checks the wallet's node, for the wallets that have one to check: a wrong node is fatal, one that
+// does not answer is retried.
+func checkWallet(ctx context.Context, payer autopay.Payer) error {
+	checker, ok := payer.(autopay.Checker)
+	if !ok {
+		return nil
+	}
+	err := checker.Check(ctx)
+	var configErr *autopay.ConfigError
+	if err == nil || errors.As(err, &configErr) {
+		return err
+	}
+	return &walletUnreachable{err}
+}
+
 // setUp checks the environment, then asks the API for the payment methods. Nothing leaves the machine before
 // the checks pass.
 func setUp(ctx context.Context, env autopay.Env) (*session, error) {
@@ -106,6 +132,10 @@ func setUp(ctx context.Context, env autopay.Env) (*session, error) {
 	}
 	payer, err := payers.MakePayer(cfg.Network, cfg.TokenAddress, env)
 	if err != nil {
+		return nil, err
+	}
+	// Before any payment is created: an EVM node of the other mainnet stops the program here.
+	if err := checkWallet(ctx, payer); err != nil {
 		return nil, err
 	}
 	// An incomplete payment goes back to the wallet itself unless told otherwise.
