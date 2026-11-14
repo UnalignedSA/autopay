@@ -4,7 +4,8 @@ from eth_account import Account
 from web3 import Web3
 
 from ..amounts import to_base_units
-from ..config import NATIVE_COIN
+from ..config import NATIVE_COIN, ConfigError
+from ..core import Payer
 
 #: `transfer` declares no outputs on purpose: Ethereum USDT returns nothing, and decoding a missing bool
 #: would fail. Success is the receipt status instead.
@@ -39,8 +40,22 @@ TOKENS: dict[str, dict[str, str]] = {
 NATIVE_DECIMALS = 18
 RECEIPT_TIMEOUT_SECONDS = 300
 
+#: The chain id of each mainnet.
+MAINNET_CHAIN_ID = {"ethereum": 1, "bsc": 56}
 
-class EvmPayer:
+
+def check_chain_id(network: str, chain_id: int) -> None:
+    """Refuses a node of the other mainnet: chain id 1 when NETWORK is bsc, 56 when it is ethereum.
+
+    A payment signed there would go out on the wrong chain. Any other chain id is allowed, so test chains
+    still work.
+    """
+    for other, other_id in MAINNET_CHAIN_ID.items():
+        if other != network and other_id == chain_id:
+            raise ConfigError(f"EVM_RPC_URL is a {other} node (chain id {chain_id}), but NETWORK is {network}")
+
+
+class EvmPayer(Payer):
     """An Ethereum-compatible wallet: the native coin or an ERC-20 token."""
 
     def __init__(self, rpc_url: str, private_key: str, network: str, token_address: str | None = None) -> None:
@@ -52,6 +67,10 @@ class EvmPayer:
 
     def address(self) -> str:
         return self._account.address
+
+    def check(self) -> None:
+        """Reads the node's chain id once at start, so a wrong node is refused before any payment is created."""
+        check_chain_id(self._network, Web3(Web3.HTTPProvider(self._rpc_url)).eth.chain_id)
 
     def token_for(self, coin: str) -> str | None:
         """The token contract for a coin: None for the chain's native coin, an error for an unknown token."""
@@ -66,10 +85,13 @@ class EvmPayer:
         w3 = Web3(Web3.HTTPProvider(self._rpc_url))
         recipient = Web3.to_checksum_address(to)
         token = self.token_for(coin)
+        # Checked again here: nothing is signed for the wrong chain, even if the node changed since the start.
+        chain_id = w3.eth.chain_id
+        check_chain_id(self._network, chain_id)
         tx: dict[str, Any] = {
             "from": self._account.address,
             "nonce": w3.eth.get_transaction_count(self._account.address),
-            "chainId": w3.eth.chain_id,
+            "chainId": chain_id,
             "gasPrice": w3.eth.gas_price,
         }
         if token is None:

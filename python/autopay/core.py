@@ -12,9 +12,12 @@ from .config import Config
 from .state import Phase, StateError, StateStore, Topup
 
 MINUTE = 60_000
-DAY = 24 * 60 * MINUTE
+HOUR = 60 * MINUTE
+DAY = 24 * HOUR
 #: An invoice with less time left than this is not paid: the payment could land after it expires.
 MIN_TIME_LEFT = 5 * MINUTE
+#: A deposit not credited this long after the send needs a person to look at it.
+DEPOSIT_CREDIT_WAIT = 2 * HOUR
 
 EXIT_FATAL = 1
 EXIT_MANUAL_CHECK = 3
@@ -30,7 +33,7 @@ class ApiLike(Protocol):
 
 
 class Payer(Protocol):
-    """Sends crypto from the wallet. One implementation per chain family."""
+    """Sends crypto from the wallet. One implementation per chain family, each a subclass of this one."""
 
     def address(self) -> str:
         """The wallet's own address."""
@@ -39,6 +42,14 @@ class Payer(Protocol):
     def send(self, to: str, coin: str, amount_crypto: str) -> str:
         """Sends `amount_crypto` (a decimal string) of `coin` to `to`. Returns the transaction id."""
         ...
+
+    def check(self) -> None:
+        """Checks the wallet's node once, before any payment is created.
+
+        Raises ConfigError when the node can never be right (an EVM node of the other mainnet). Wallets with
+        nothing to check keep this default, which does nothing.
+        """
+        return None
 
 
 class Status(Enum):
@@ -102,10 +113,15 @@ def _cycle(cfg: Config, api: ApiLike, payer: Payer, store: StateStore, now: Cloc
     if open_topup is not None and open_topup.phase is Phase.SENDING:
         return _manual_check(out, "a send may or may not have gone out: check the wallet, then edit the state file")
     if open_topup is not None and open_topup.phase is Phase.SENT:
-        return _follow(api, topups, store, open_topup, out)
+        return _follow(api, topups, store, open_topup, now, out)
 
     if open_topup is not None:
-        # Created but not sent: the program stopped between the two.
+        # Created but not sent: the program stopped between the two. Never pay it with another wallet.
+        if open_topup.network != cfg.network or open_topup.coin != cfg.coin:
+            raise Fatal(
+                f"invoice {open_topup.id} waits for {open_topup.coin} on {open_topup.network}, but the configuration "
+                f"says {cfg.coin} on {cfg.network}: set them back until it is done, or close it in the state file"
+            )
         invoice = api.get_payment(open_topup.id)
         if invoice.status in ("expired", "paid", "refunded"):
             _finish(topups, store, open_topup, invoice.status, out)
@@ -224,23 +240,33 @@ def _send(payer: Payer, topups: list[Topup], store: StateStore, topup: Topup, no
             out, f"the send failed ({err}) but may have gone out: check the wallet, then edit the state file"
         )
 
+    # Logged before the save: if the save fails, the transaction id is still on screen.
+    out(f"sent {txid}")
     topup.phase = Phase.SENT
     topup.txid = txid
     topup.sent_at = now()
     if topup.kind is Kind.DEPOSIT:
         topup.id = f"deposit:{txid}"
     store.save(topups)
-    out(f"sent {txid}")
     return Outcome(Status.SENT)
 
 
-def _follow(api: ApiLike, topups: list[Topup], store: StateStore, topup: Topup, out: Log) -> Outcome:
+def _follow(api: ApiLike, topups: list[Topup], store: StateStore, topup: Topup, now: Clock, out: Log) -> Outcome:
     """Follows a payment that was sent until the account is credited."""
     if topup.kind is Kind.DEPOSIT:
         deposits = api.deposit(topup.network).deposits
         if any(d.tx_hash == topup.txid and d.credited for d in deposits):
             _finish(topups, store, topup, "credited", out)
             return Outcome(Status.IDLE)
+        # A deposit is listed once its transaction is seen on chain. One still missing after hours was most
+        # likely dropped, or went somewhere else: waiting longer will not tell.
+        sent_at = topup.sent_at if topup.sent_at is not None else topup.created_at
+        if now() - sent_at > DEPOSIT_CREDIT_WAIT:
+            return _manual_check(
+                out,
+                f"deposit {topup.txid} is not credited 2 hours after the send: look the transaction up on chain, "
+                "then edit the state file",
+            )
         out(f"waiting {topup.id} (not credited yet)")
         return Outcome(Status.PENDING)
 

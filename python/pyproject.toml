@@ -9,16 +9,16 @@ description = "Keeps an Unaligned balance topped up, in crypto, with no one watc
 license = "MIT"
 requires-python = ">=3.11"
 dependencies = [
-    "httpx>=0.28",
-    "web3>=7",
-    "solana>=0.36",
-    "solders>=0.26",
+    "httpx>=0.28,<0.29",
+    "web3>=7,<9",
+    "solana>=0.36,<0.43",
+    "solders>=0.26,<0.30",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8",
-    "ruff>=0.8",
+    "pytest>=8,<10",
+    "ruff>=0.8,<0.18",
 ]
 
 [tool.setuptools]

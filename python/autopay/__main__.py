@@ -48,6 +48,20 @@ def load_env_file(path: str | Path, env: MutableMapping[str, str]) -> None:
         env.setdefault(key, value)
 
 
+class WalletUnreachable(Exception):
+    """The wallet's node did not answer at start. Like the API being down, it is tried again on the next tick."""
+
+
+def check_wallet(payer: Payer) -> None:
+    """Checks the wallet's node: a wrong node is fatal, one that does not answer is retried."""
+    try:
+        payer.check()
+    except ConfigError:
+        raise
+    except Exception as err:
+        raise WalletUnreachable(f"wallet RPC: {err}") from err
+
+
 @dataclass
 class Session:
     cfg: Config
@@ -66,6 +80,8 @@ def set_up(env: Mapping[str, str]) -> Session:
     cfg = load_config(env, methods)
     api = Api(cfg.api, cfg.key)
     payer = make_payer(cfg, env)
+    # Before any payment is created: an EVM node of the other mainnet stops the program here.
+    check_wallet(payer)
     # An incomplete payment goes back to the wallet itself unless told otherwise.
     if not cfg.refund_address and cfg.network in ("ethereum", "bsc", "solana"):
         cfg = replace(cfg, refund_address=payer.address())
@@ -87,8 +103,8 @@ def main(argv: list[str]) -> int:
         if session is None:
             try:
                 session = set_up(os.environ)
-            except ApiError as err:
-                if not err.transient:
+            except (ApiError, WalletUnreachable) as err:
+                if isinstance(err, ApiError) and not err.transient:
                     raise
                 log(f"retry: {err}")
                 return Outcome(Status.RETRY, str(err))

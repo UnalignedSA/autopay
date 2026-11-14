@@ -14,7 +14,7 @@ from solders.keypair import Keypair
 from autopay.api import Kind, Method
 from autopay.config import Config, ConfigError
 from autopay.payers import make_payer
-from autopay.payers.evm import ERC20_ABI, EvmPayer
+from autopay.payers.evm import ERC20_ABI, EvmPayer, check_chain_id
 from autopay.payers.monero import MoneroPayer
 from autopay.payers.solana import SolanaPayer, parse_solana_key
 from autopay.payers.utxo import UtxoPayer
@@ -155,6 +155,32 @@ def test_evm_the_erc20_transfer_abi_has_no_outputs_ethereum_usdt_returns_nothing
     # The payer is built with a token override, as TOKEN_ADDRESS would give it.
     payer = EvmPayer("http://127.0.0.1:1", KEY, "ethereum", OVERRIDE)
     assert payer.token_for("USDT") == OVERRIDE
+
+
+def test_evm_a_node_of_the_other_mainnet_is_refused_other_chain_ids_are_allowed() -> None:
+    with pytest.raises(ConfigError):
+        check_chain_id("bsc", 1)
+    with pytest.raises(ConfigError, match=r"chain id 56.*NETWORK is ethereum"):
+        check_chain_id("ethereum", 56)
+    for network, chain_id in [("ethereum", 1), ("bsc", 56), ("ethereum", 31337), ("bsc", 97)]:
+        check_chain_id(network, chain_id)
+
+
+def test_evm_check_and_send_refuse_a_wrong_node_before_anything_is_signed() -> None:
+    methods: list[str] = []
+
+    def node(seen: Seen, _: int) -> Reply:
+        request = json.loads(seen.body)
+        methods.append(request["method"])
+        return 200, {}, json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": "0x1"})
+
+    with stub(node) as (url, _):
+        payer = EvmPayer(url, KEY, "bsc")
+        with pytest.raises(ConfigError):
+            payer.check()
+        with pytest.raises(ConfigError, match=r"ethereum node \(chain id 1\)"):
+            payer.send(OVERRIDE, "BNB", "1")
+    assert set(methods) == {"eth_chainId"}
 
 
 def test_evm_address_is_derived_from_the_key() -> None:

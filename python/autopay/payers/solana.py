@@ -20,6 +20,7 @@ from spl.token.models import TransferCheckedParams
 
 from ..amounts import to_base_units
 from ..config import NATIVE_COIN
+from ..core import Payer
 
 MINTS: dict[str, str] = {
     "USDT": "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
@@ -50,7 +51,7 @@ def b58decode(text: str) -> bytes:
     return b"\0" * leading_zeros + number.to_bytes((number.bit_length() + 7) // 8, "big")
 
 
-class SolanaPayer:
+class SolanaPayer(Payer):
     """A Solana wallet: SOL, or an SPL token with the recipient's token account created if needed."""
 
     def __init__(self, rpc_url: str, private_key: str, token_address: str | None = None) -> None:

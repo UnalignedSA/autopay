@@ -4,12 +4,13 @@ import re
 import httpx
 
 from ..amounts import to_base_units
+from ..core import Payer
 
 DECIMALS = 8
 TIMEOUT_SECONDS = 120.0
 
 
-class UtxoPayer:
+class UtxoPayer(Payer):
     """Bitcoin Core / Litecoin Core wallet over JSON-RPC (`sendtoaddress`), with basic auth."""
 
     def __init__(self, url: str, user: str, password: str) -> None:

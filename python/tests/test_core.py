@@ -1,4 +1,5 @@
 import json
+import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -8,7 +9,7 @@ import pytest
 from autopay.api import ApiError, Deposit, DepositEntry, Invoice, Kind, Method
 from autopay.config import Config
 from autopay.core import Fatal, Outcome, Status, step, watch_loop
-from autopay.state import Phase, StateStore, Topup
+from autopay.state import Phase, StateError, StateStore, Topup
 
 NOW = 1_800_000_000_000
 MINUTE = 60_000
@@ -472,6 +473,62 @@ def test_watch_stops_with_0_when_asked_to() -> None:
 
     assert watch_loop(run, sleep, lambda: 60, lambda: stop) == 0
     assert runs == 1
+
+
+@pytest.mark.parametrize("other", [{"network": "ethereum"}, {"coin": "USDC"}])
+def test_a_created_invoice_for_another_network_or_coin_than_the_configuration_is_never_paid(
+    h: Harness, other: dict[str, Any]
+) -> None:
+    h.save(record(phase=Phase.CREATED, **other))
+    with pytest.raises(Fatal, match="inv-1"):
+        h.run()
+    assert h.api.calls == []
+    assert h.payer.sent == []
+    assert h.topups[0].phase is Phase.CREATED
+
+
+def test_the_transaction_id_is_logged_even_when_the_save_after_the_send_fails(h: Harness) -> None:
+    class FailingStore(StateStore):
+        """Fails to save the record once it is `sent`: the save after the send."""
+
+        def save(self, topups: list[Topup]) -> None:
+            if any(t.phase is Phase.SENT for t in topups):
+                raise StateError("disk full")
+            super().save(topups)
+
+    lines: list[str] = []
+    with pytest.raises(Fatal, match="disk full"):
+        step(h.config(), h.api, h.payer, FailingStore(h.path), lambda: NOW, lines.append)
+    assert len(h.payer.sent) == 1
+    assert "sent 0xtxid" in lines
+
+
+def test_a_deposit_still_not_credited_2_hours_after_the_send_needs_a_manual_check(h: Harness) -> None:
+    cfg = solana_config(h)
+    sent = record(
+        id="deposit:0xtxid",
+        kind=Kind.DEPOSIT,
+        network="solana",
+        amount_crypto="50",
+        address="SoLaddress",
+        expires_at=None,
+        phase=Phase.SENT,
+        txid="0xtxid",
+        sent_at=NOW - 2 * HOUR,
+    )
+    h.save(sent)
+    assert h.run(cfg).status is Status.PENDING
+
+    h.save(replace(sent, sent_at=NOW - 2 * HOUR - 1))
+    outcome = h.run(cfg)
+    assert outcome.status is Status.MANUAL_CHECK
+    assert re.search(r"0xtxid.*2 hours", outcome.reason)
+    assert h.topups[0].phase is Phase.SENT
+
+    # Credited late is still credited.
+    h.api.deposits = [DepositEntry(tx_hash="0xtxid", credited=True)]
+    assert h.run(cfg).status is Status.IDLE
+    assert h.topups[0].result == "credited"
 
 
 def test_watch_lets_a_fatal_error_through() -> None:

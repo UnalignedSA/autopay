@@ -27,6 +27,10 @@ NOEQUALS
     }
 
 
+def test_a_single_quoted_value_is_taken_literally() -> None:
+    assert parse_env_file("""QUOTED='p#ss $HOME "q" x'\n""") == {"QUOTED": 'p#ss $HOME "q" x'}
+
+
 def test_the_file_never_overrides_a_variable_that_is_already_set(tmp_path: Path) -> None:
     path = tmp_path / ".env"
     path.write_text("A=from-file\nB=from-file\n")

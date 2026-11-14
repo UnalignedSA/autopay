@@ -3,12 +3,13 @@ import json
 import httpx
 
 from ..amounts import to_base_units
+from ..core import Payer
 
 DECIMALS = 12
 TIMEOUT_SECONDS = 120.0
 
 
-class MoneroPayer:
+class MoneroPayer(Payer):
     """monero-wallet-rpc `transfer`. Digest auth is used only when a user is set."""
 
     def __init__(self, url: str, user: str = "", password: str = "") -> None:
