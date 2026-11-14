@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="420" viewBox="0 0 1280 420" role="img" aria-labelledby="t d">
+  <title id="t">How autopay works</title>
+  <desc id="d">Every CHECK_INTERVAL: check the balance; if it is below the threshold, create a payment, pay it from your wallet, and follow it until it is credited. Otherwise wait for the next check.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10z" fill="#9a958e"/>
+    </marker>
+    <marker id="arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10z" fill="#e5322d"/>
+    </marker>
+    <style>
+      .display { font-family: 'Unbounded', 'Inter', 'Segoe UI', -apple-system, 'Helvetica Neue', Arial, sans-serif; font-weight: 700; }
+      .sans { font-family: 'Inter', 'Segoe UI', -apple-system, 'Helvetica Neue', Arial, sans-serif; }
+      .mono { font-family: 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, 'Liberation Mono', monospace; }
+      .card { fill: #151412; stroke: #262422; }
+      .num { fill: #e5322d; }
+      .h { fill: #edebe7; font-size: 21px; }
+      .code { fill: #edebe7; font-size: 14px; }
+      .muted { fill: #9a958e; font-size: 15px; }
+      .faint { fill: #615d57; font-size: 13px; letter-spacing: 1.5px; }
+    </style>
+  </defs>
+
+  <rect width="1280" height="420" fill="#0d0c0b"/>
+  <text x="56" y="62" class="mono faint">EVERY CHECK_INTERVAL</text>
+
+  <!-- step 1 -->
+  <g transform="translate(56 92)">
+    <rect class="card" width="262" height="196"/>
+    <rect width="34" height="34" class="num"/>
+    <text x="17" y="23" text-anchor="middle" class="display" font-size="16" fill="#0d0c0b">1</text>
+    <text x="24" y="78" class="sans h" font-weight="600">Check the balance</text>
+    <rect x="24" y="96" width="132" height="28" fill="#0d0c0b" stroke="#262422"/>
+    <text x="34" y="115" class="mono code">GET /balance</text>
+    <text x="24" y="152" class="sans muted">Below THRESHOLD_USD?</text>
+    <text x="24" y="174" class="sans muted">Within MAX_PER_DAY_USD?</text>
+  </g>
+
+  <!-- step 2 -->
+  <g transform="translate(362 92)">
+    <rect class="card" width="262" height="196"/>
+    <rect width="34" height="34" class="num"/>
+    <text x="17" y="23" text-anchor="middle" class="display" font-size="16" fill="#0d0c0b">2</text>
+    <text x="24" y="78" class="sans h" font-weight="600">Create a payment</text>
+    <rect x="24" y="96" width="148" height="28" fill="#0d0c0b" stroke="#262422"/>
+    <text x="34" y="115" class="mono code">POST /payments</text>
+    <text x="24" y="152" class="sans muted">An invoice, or your fixed</text>
+    <text x="24" y="174" class="sans muted">deposit address.</text>
+  </g>
+
+  <!-- step 3 -->
+  <g transform="translate(668 92)">
+    <rect class="card" width="262" height="196" style="stroke:#e5322d"/>
+    <rect width="34" height="34" class="num"/>
+    <text x="17" y="23" text-anchor="middle" class="display" font-size="16" fill="#0d0c0b">3</text>
+    <text x="24" y="78" class="sans h" font-weight="600">Pay from your wallet</text>
+    <rect x="24" y="96" width="196" height="28" fill="#0d0c0b" stroke="#262422"/>
+    <text x="34" y="115" class="mono code">send exact amount</text>
+    <text x="24" y="152" class="sans muted">Recorded as sending</text>
+    <text x="24" y="174" class="sans muted">before any coin moves.</text>
+  </g>
+
+  <!-- step 4 -->
+  <g transform="translate(974 92)">
+    <rect class="card" width="250" height="196"/>
+    <rect width="34" height="34" class="num"/>
+    <text x="17" y="23" text-anchor="middle" class="display" font-size="16" fill="#0d0c0b">4</text>
+    <text x="24" y="78" class="sans h" font-weight="600">Follow it</text>
+    <rect x="24" y="96" width="196" height="28" fill="#0d0c0b" stroke="#262422"/>
+    <text x="34" y="115" class="mono code">GET /payments/{id}</text>
+    <text x="24" y="152" class="sans muted">Until paid or credited.</text>
+    <text x="24" y="174" class="sans" font-size="15" fill="#7fb685">Balance topped up.</text>
+  </g>
+
+  <!-- arrows between steps -->
+  <path d="M322 190H356" stroke="#9a958e" stroke-width="2" marker-end="url(#arrow)"/>
+  <path d="M628 190H662" stroke="#9a958e" stroke-width="2" marker-end="url(#arrow)"/>
+  <path d="M934 190H968" stroke="#9a958e" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- loop back -->
+  <path d="M1099 292V352H187V296" fill="none" stroke="#3a3733" stroke-width="2" stroke-dasharray="6 6" marker-end="url(#arrow)"/>
+  <rect x="512" y="340" width="256" height="24" fill="#0d0c0b"/>
+  <text x="640" y="357" text-anchor="middle" class="mono" font-size="14" fill="#9a958e">next check, CHECK_INTERVAL later</text>
+
+  <!-- balance ok branch -->
+  <text x="56" y="396" class="sans" font-size="14" fill="#615d57">Balance high enough: nothing to do until the next check.  ·  Temporary failure: logged as retry, tried again next time.</text>
+</svg>

@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="400" viewBox="0 0 1280 400" role="img" aria-labelledby="t d">
+  <title id="t">Never pays twice</title>
+  <desc id="d">Every top-up goes through the phases created, sending, sent, done in the state file. The sending phase is saved to disk before any coin moves. When the program cannot know whether money moved, it stops with MANUAL CHECK instead of guessing.</desc>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0L10 5L0 10z" fill="#9a958e"/>
+    </marker>
+    <marker id="r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0L10 5L0 10z" fill="#e5322d"/>
+    </marker>
+    <style>
+      .sans { font-family: 'Inter', 'Segoe UI', -apple-system, 'Helvetica Neue', Arial, sans-serif; }
+      .mono { font-family: 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, 'Liberation Mono', monospace; }
+      .state { fill: #151412; stroke: #3a3733; }
+      .label { fill: #edebe7; font-size: 18px; }
+      .note { fill: #9a958e; font-size: 14px; }
+      .faint { fill: #615d57; font-size: 13px; letter-spacing: 1.5px; }
+    </style>
+  </defs>
+
+  <rect width="1280" height="400" fill="#0d0c0b"/>
+  <text x="56" y="56" class="mono faint">STATE FILE · ONE RECORD PER TOP-UP</text>
+
+  <!-- states -->
+  <g class="mono">
+    <rect x="56" y="104" width="190" height="64" class="state"/>
+    <text x="151" y="143" text-anchor="middle" class="label">created</text>
+
+    <rect x="366" y="104" width="190" height="64" class="state" style="stroke:#e5322d"/>
+    <text x="461" y="143" text-anchor="middle" class="label">sending</text>
+
+    <rect x="676" y="104" width="190" height="64" class="state"/>
+    <text x="771" y="143" text-anchor="middle" class="label">sent</text>
+
+    <rect x="986" y="104" width="190" height="64" class="state" style="stroke:#7fb685"/>
+    <text x="1081" y="143" text-anchor="middle" class="label">done</text>
+  </g>
+
+  <!-- transitions -->
+  <path d="M250 136H360" stroke="#9a958e" stroke-width="2" marker-end="url(#a)"/>
+  <path d="M560 136H670" stroke="#9a958e" stroke-width="2" marker-end="url(#a)"/>
+  <path d="M870 136H980" stroke="#9a958e" stroke-width="2" marker-end="url(#a)"/>
+
+  <text x="305" y="94" text-anchor="middle" class="sans note">saved + fsynced</text>
+  <text x="615" y="94" text-anchor="middle" class="sans note">coins sent, txid</text>
+  <text x="925" y="94" text-anchor="middle" class="sans note">paid / credited</text>
+
+  <!-- manual check -->
+  <rect x="366" y="258" width="500" height="64" fill="#1a0f0e" stroke="#e5322d"/>
+  <text x="616" y="288" text-anchor="middle" class="mono" font-size="18" fill="#e5322d">MANUAL CHECK  ·  exit 3</text>
+  <text x="616" y="310" text-anchor="middle" class="sans note">it stops and asks, it never guesses</text>
+
+  <path d="M461 172V252" stroke="#e5322d" stroke-width="2" stroke-dasharray="5 5" marker-end="url(#r)"/>
+  <path d="M771 172V252" stroke="#e5322d" stroke-width="2" stroke-dasharray="5 5" marker-end="url(#r)"/>
+  <text x="449" y="216" text-anchor="end" class="sans note">crash or wallet error</text>
+  <text x="449" y="234" text-anchor="end" class="sans note">mid-send</text>
+  <text x="783" y="216" class="sans note">invoice expired after paying,</text>
+  <text x="783" y="234" class="sans note">deposit not credited in 2 h</text>
+
+  <!-- guards -->
+  <g class="sans" font-size="14" fill="#615d57">
+    <text x="56" y="372">Also: a daily cap on what was sent in 24 h  ·  every payment checked against your config before paying  ·  a corrupt state file stops the program</text>
+  </g>
+</svg>

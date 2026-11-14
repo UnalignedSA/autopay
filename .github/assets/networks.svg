@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="470" viewBox="0 0 1280 470" role="img" aria-labelledby="t d">
+  <title id="t">Supported networks</title>
+  <desc id="d">Ethereum: ETH, USDT, USDC with a private key. BNB Smart Chain: USDT, USDC with a private key. Solana: SOL, USDT, USDC with a private key. Bitcoin: BTC and Litecoin: LTC through your node's wallet RPC. Monero: XMR through monero-wallet-rpc.</desc>
+  <defs>
+    <style>
+      .display { font-family: 'Unbounded', 'Inter', 'Segoe UI', -apple-system, 'Helvetica Neue', Arial, sans-serif; font-weight: 700; }
+      .sans { font-family: 'Inter', 'Segoe UI', -apple-system, 'Helvetica Neue', Arial, sans-serif; }
+      .mono { font-family: 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, 'Liberation Mono', monospace; }
+      .card { fill: #151412; stroke: #262422; }
+      .name { fill: #edebe7; font-size: 22px; font-weight: 600; }
+      .net { fill: #615d57; font-size: 13px; letter-spacing: 1px; }
+      .chip { fill: none; stroke: #3a3733; }
+      .chiptext { fill: #edebe7; font-size: 14px; letter-spacing: 1px; }
+      .how { fill: #9a958e; font-size: 15px; }
+      .faint { fill: #615d57; font-size: 13px; letter-spacing: 1.5px; }
+    </style>
+  </defs>
+
+  <rect width="1280" height="470" fill="#0d0c0b"/>
+  <text x="56" y="56" class="mono faint">NETWORK · COIN · HOW IT PAYS</text>
+
+  <!-- row 1 -->
+  <g transform="translate(56 80)">
+    <rect class="card" width="376" height="164"/>
+    <rect width="6" height="164" fill="#e5322d"/>
+    <text x="30" y="44" class="sans name">Ethereum</text>
+    <text x="346" y="42" text-anchor="end" class="mono net">ethereum</text>
+    <g class="mono">
+      <rect x="30" y="64" width="56" height="30" class="chip"/><text x="58" y="84" text-anchor="middle" class="chiptext">ETH</text>
+      <rect x="94" y="64" width="66" height="30" class="chip"/><text x="127" y="84" text-anchor="middle" class="chiptext">USDT</text>
+      <rect x="168" y="64" width="66" height="30" class="chip"/><text x="201" y="84" text-anchor="middle" class="chiptext">USDC</text>
+    </g>
+    <text x="30" y="134" class="sans how">Signs with a private key</text>
+  </g>
+
+  <g transform="translate(452 80)">
+    <rect class="card" width="376" height="164"/>
+    <rect width="6" height="164" fill="#e5322d"/>
+    <text x="30" y="44" class="sans name">BNB Smart Chain</text>
+    <text x="346" y="42" text-anchor="end" class="mono net">bsc</text>
+    <g class="mono">
+      <rect x="30" y="64" width="66" height="30" class="chip"/><text x="63" y="84" text-anchor="middle" class="chiptext">USDT</text>
+      <rect x="104" y="64" width="66" height="30" class="chip"/><text x="137" y="84" text-anchor="middle" class="chiptext">USDC</text>
+    </g>
+    <text x="30" y="134" class="sans how">Signs with a private key</text>
+  </g>
+
+  <g transform="translate(848 80)">
+    <rect class="card" width="376" height="164"/>
+    <rect width="6" height="164" fill="#e5322d"/>
+    <text x="30" y="44" class="sans name">Solana</text>
+    <text x="346" y="42" text-anchor="end" class="mono net">solana</text>
+    <g class="mono">
+      <rect x="30" y="64" width="56" height="30" class="chip"/><text x="58" y="84" text-anchor="middle" class="chiptext">SOL</text>
+      <rect x="94" y="64" width="66" height="30" class="chip"/><text x="127" y="84" text-anchor="middle" class="chiptext">USDT</text>
+      <rect x="168" y="64" width="66" height="30" class="chip"/><text x="201" y="84" text-anchor="middle" class="chiptext">USDC</text>
+    </g>
+    <text x="30" y="134" class="sans how">Signs with a private key</text>
+  </g>
+
+  <!-- row 2 -->
+  <g transform="translate(56 264)">
+    <rect class="card" width="376" height="164"/>
+    <rect width="6" height="164" fill="#edebe7"/>
+    <text x="30" y="44" class="sans name">Bitcoin</text>
+    <text x="346" y="42" text-anchor="end" class="mono net">bitcoin</text>
+    <g class="mono">
+      <rect x="30" y="64" width="56" height="30" class="chip"/><text x="58" y="84" text-anchor="middle" class="chiptext">BTC</text>
+    </g>
+    <text x="30" y="134" class="sans how">Asks your node's wallet (RPC)</text>
+  </g>
+
+  <g transform="translate(452 264)">
+    <rect class="card" width="376" height="164"/>
+    <rect width="6" height="164" fill="#edebe7"/>
+    <text x="30" y="44" class="sans name">Litecoin</text>
+    <text x="346" y="42" text-anchor="end" class="mono net">litecoin</text>
+    <g class="mono">
+      <rect x="30" y="64" width="56" height="30" class="chip"/><text x="58" y="84" text-anchor="middle" class="chiptext">LTC</text>
+    </g>
+    <text x="30" y="134" class="sans how">Asks your node's wallet (RPC)</text>
+  </g>
+
+  <g transform="translate(848 264)">
+    <rect class="card" width="376" height="164"/>
+    <rect width="6" height="164" fill="#edebe7"/>
+    <text x="30" y="44" class="sans name">Monero</text>
+    <text x="346" y="42" text-anchor="end" class="mono net">monero</text>
+    <g class="mono">
+      <rect x="30" y="64" width="56" height="30" class="chip"/><text x="58" y="84" text-anchor="middle" class="chiptext">XMR</text>
+    </g>
+    <text x="30" y="134" class="sans how">Asks your monero-wallet-rpc</text>
+  </g>
+
+  <text x="56" y="456" class="sans" font-size="14" fill="#615d57">USDT and USDC on Solana go to your account's fixed deposit address, credited 1:1. Every other pair is paid by invoice.</text>
+</svg>
