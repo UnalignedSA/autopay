@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ConfigError, loadConfig } from '../src/config.ts';
+import { ConfigError, loadConfig, preflight } from '../src/config.ts';
 import type { Method } from '../src/api.ts';
 
 const methods: Method[] = [
@@ -97,4 +97,11 @@ test('a deposit method has no maximum and needs the Solana wallet', () => {
 
 test('DRY_RUN=1 is read', () => {
 	assert.equal(loadConfig({ ...base, DRY_RUN: '1' }, methods).dryRun, true);
+});
+
+test('preflight checks everything it can without the API', () => {
+	assert.throws(() => preflight({ ...base, NETWORK: 'tron' }), /Tron/);
+	assert.throws(() => preflight({ ...base, UNALIGNED_KEY: '' }), /UNALIGNED_KEY/);
+	assert.throws(() => preflight({ ...base, EVM_RPC_URL: '' }), /EVM_RPC_URL/);
+	assert.equal(preflight(base).topupUsd, 50);
 });

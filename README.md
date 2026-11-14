@@ -132,12 +132,37 @@ moved. It will not guess. Two cases:
 
 - **A send may or may not have gone out** (the state shows `sending`): the program crashed, or the
   wallet call failed, in the middle of a send. Look at your wallet's history.
-  - The payment is there: set the record's `phase` to `sent` and its `txid` to the transaction id.
+  - The payment is there: set the record's `phase` to `sent`, `txid` to the transaction id and `sentAt`
+    to the time it went out (milliseconds since 1970). `sentAt` matters: it is what the daily cap counts.
   - It is not: set `phase` to `done` and `result` to `"failed"`.
 - **An invoice expired after you paid it** (the state shows `sent`, the API says `expired`): a late
   payment is still credited. Check your balance and the wallet, then set the record's `phase` to `done`.
 
 Edit the file while the program is stopped, then start it again.
+
+## Behaviour details
+
+These choices are the same in every language.
+
+- **Order of checks at start**: the environment is validated first (required variables, Tron, numbers,
+  `CHECK_INTERVAL`, the wallet variables of the network). Only then is `GET /payments/methods` called
+  (public, sent without your key) to check the coin, network and amount.
+- **Retries**: network errors, timeouts, unreadable responses, HTTP 5xx and HTTP 429 are temporary.
+  `watch` logs `retry: ...` and tries again on the next tick, including when the API is down at start;
+  `once` logs it and exits `0`. HTTP 401 and 403 and any other 4xx are fatal (`1`).
+- **Daily cap**: a top-up is refused when `TOPUP_USD` plus what was sent in the last 24 hours is above
+  `MAX_PER_DAY_USD`. The log shows what was already sent: `daily cap reached (45/50 USD in 24h)`. A
+  record counts from `sentAt`; a hand-edited record without it (it has a `txid`, or is `sending` or
+  `sent`) counts from `createdAt`.
+- **The payment must match the request**: before anything is sent, the coin and network of the answer
+  must be the configured ones and an invoice's `amountUsd` must equal `TOPUP_USD`. Otherwise the
+  program stops with exit `1`, sends nothing and records nothing.
+- **Invoice not `waiting`**: a `created` invoice (not yet sent) whose status is already something else
+  than `waiting` and `expired` (for example `confirming`) is never paid again: the cycle ends `Pending`.
+  `paid` and `refunded` close it, `expired` closes it as `expired`.
+- **State file validation**: every field of every record is checked. A malformed record is fatal, so
+  check your edits.
+- **Dry run**: `DRY_RUN=1` still needs the wallet variables (the default refund address is the wallet's).
 
 ## Not included
 

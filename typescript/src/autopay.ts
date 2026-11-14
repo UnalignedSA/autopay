@@ -35,6 +35,9 @@ export type Outcome =
 /** Something that will not fix itself: bad configuration, bad key, corrupt state, rejected request. */
 export class Fatal extends Error {}
 
+export const EXIT_FATAL = 1;
+export const EXIT_MANUAL_CHECK = 3;
+
 export type Log = (message: string) => void;
 
 export const log: Log = (message) => console.log(`${new Date().toISOString()} ${message}`);
@@ -106,8 +109,12 @@ async function cycle(
 			return { type: 'idle' };
 		}
 
+		const since = now() - DAY;
 		const sentToday = state.topups
-			.filter((t) => t.sentAt !== null && t.sentAt > now() - DAY)
+			.filter((t) => {
+				const at = sendTime(t);
+				return at !== null && at > since;
+			})
 			.reduce((sum, t) => sum + t.amountUsd, 0);
 		if (sentToday + cfg.topupUsd > cfg.maxPerDayUsd) {
 			out(`daily cap reached (${sentToday}/${cfg.maxPerDayUsd} USD in 24h)`);
@@ -131,6 +138,15 @@ async function cycle(
 	return send(payer, state, store, topup, now, out);
 }
 
+/**
+ * When money went out for this record, or null if it did not. A record edited by hand after a manual
+ * check may lack `sentAt`: it still counts, dated by its creation, so the daily cap cannot be bypassed.
+ */
+function sendTime(t: Topup): number | null {
+	if (t.sentAt !== null) return t.sentAt;
+	return t.txid !== null || t.phase === 'sending' || t.phase === 'sent' ? t.createdAt : null;
+}
+
 /** Asks the API for a payment and turns the answer into a state record (not saved yet). */
 async function createTopup(cfg: Config, api: ApiLike, now: number): Promise<Topup> {
 	const common = {
@@ -143,6 +159,11 @@ async function createTopup(cfg: Config, api: ApiLike, now: number): Promise<Topu
 
 	if (cfg.method.kind === 'deposit') {
 		const deposit = (await api.createPayment({ coin: cfg.coin, network: cfg.network })) as Deposit;
+		if (deposit.network !== cfg.network || !deposit.coins.includes(cfg.coin)) {
+			throw new Fatal(
+				`the API answered with ${deposit.coins.join('/')} on ${deposit.network}, not ${cfg.coin} on ${cfg.network}`
+			);
+		}
 		// A fixed deposit address is credited 1:1, so the dollars are the amount.
 		return {
 			...common,
@@ -160,6 +181,13 @@ async function createTopup(cfg: Config, api: ApiLike, now: number): Promise<Topu
 	const body: Record<string, unknown> = { amount_usd: cfg.topupUsd, coin: cfg.coin, network: cfg.network };
 	if (cfg.refundAddress) body.refund_address = cfg.refundAddress;
 	const invoice = (await api.createPayment(body)) as Invoice;
+	// Never pay something that is not what was asked for.
+	if (invoice.coin !== cfg.coin || invoice.network !== cfg.network || invoice.amountUsd !== cfg.topupUsd) {
+		throw new Fatal(
+			`the API answered with ${invoice.amountUsd} USD in ${invoice.coin} on ${invoice.network}, ` +
+				`not ${cfg.topupUsd} USD in ${cfg.coin} on ${cfg.network}`
+		);
+	}
 	return {
 		...common,
 		id: invoice.id,
@@ -250,4 +278,22 @@ function finish(state: State, store: StateStore, topup: Topup, result: string, o
 function manualCheck(out: Log, reason: string): Outcome {
 	out(`MANUAL CHECK: ${reason}`);
 	return { type: 'manualCheck', reason };
+}
+
+/**
+ * Runs `run` every `intervalSeconds()` until it asks for a manual check (exit 3) or `stopped()` is true
+ * (exit 0). A Fatal error is thrown to the caller. Retry outcomes just wait for the next tick.
+ */
+export async function watchLoop(
+	run: () => Promise<Outcome>,
+	sleep: (ms: number) => Promise<void>,
+	intervalSeconds: () => number,
+	stopped: () => boolean
+): Promise<number> {
+	while (!stopped()) {
+		const outcome = await run();
+		if (outcome.type === 'manualCheck') return EXIT_MANUAL_CHECK;
+		await sleep(intervalSeconds() * 1000);
+	}
+	return 0;
 }

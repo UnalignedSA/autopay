@@ -89,15 +89,27 @@ function isState(value: unknown): value is State {
 	return s.version === 1 && Array.isArray(s.topups) && s.topups.every(isTopup);
 }
 
+const isString = (v: unknown): v is string => typeof v === 'string';
+const isNumber = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+const orNull = (check: (v: unknown) => boolean) => (v: unknown) => v === null || check(v);
+
+/** The file is meant to be hand-edited after a manual check, so every field is verified. */
 function isTopup(value: unknown): boolean {
 	if (typeof value !== 'object' || value === null) return false;
 	const t = value as Record<string, unknown>;
 	return (
-		typeof t.id === 'string' &&
+		isString(t.id) &&
 		(t.kind === 'invoice' || t.kind === 'deposit') &&
-		typeof t.amountUsd === 'number' &&
-		typeof t.amountCrypto === 'string' &&
-		typeof t.address === 'string' &&
-		['created', 'sending', 'sent', 'done'].includes(t.phase as string)
+		isString(t.network) &&
+		isString(t.coin) &&
+		isNumber(t.amountUsd) &&
+		isString(t.amountCrypto) &&
+		isString(t.address) &&
+		orNull(isNumber)(t.expiresAt) &&
+		(t.phase === 'created' || t.phase === 'sending' || t.phase === 'sent' || t.phase === 'done') &&
+		orNull(isString)(t.txid) &&
+		isNumber(t.createdAt) &&
+		orNull(isNumber)(t.sentAt) &&
+		orNull(isString)(t.result)
 	);
 }

@@ -56,8 +56,9 @@ export class Api {
 		return body.balance;
 	}
 
+	/** Public: sent without the key. */
 	async methods(): Promise<Method[]> {
-		return (await this.#request('GET', '/payments/methods')) as Method[];
+		return (await this.#request('GET', '/payments/methods', undefined, false)) as Method[];
 	}
 
 	/** 201 with an invoice, or 200 with the account's fixed deposit address. */
@@ -73,19 +74,31 @@ export class Api {
 		return (await this.#request('GET', `/payments/deposit/${encodeURIComponent(network)}`)) as Deposit;
 	}
 
-	async #request(method: string, path: string, body?: unknown): Promise<unknown> {
+	async #request(method: string, path: string, body?: unknown, auth = true): Promise<unknown> {
 		let res: Response;
 		try {
 			res = await fetch(this.#base + path, {
 				method,
-				headers: { Authorization: `Bearer ${this.#key}`, 'Content-Type': 'application/json' },
+				headers: auth
+					? { Authorization: `Bearer ${this.#key}`, 'Content-Type': 'application/json' }
+					: { 'Content-Type': 'application/json' },
 				body: body === undefined ? undefined : JSON.stringify(body),
 				signal: AbortSignal.timeout(30_000)
 			});
 		} catch (err) {
 			throw new ApiError(`network error: ${errorText(err)}`, { status: 0, transient: true });
 		}
-		if (res.ok) return res.json();
+		if (res.ok) {
+			try {
+				return await res.json();
+			} catch (err) {
+				// The body was cut off or is not JSON: treat it like any other glitch and try again later.
+				throw new ApiError(`${method} ${path}: unreadable response: ${errorText(err)}`, {
+					status: res.status,
+					transient: true
+				});
+			}
+		}
 
 		let code: string | undefined;
 		let message = res.statusText;
@@ -96,10 +109,12 @@ export class Api {
 		} catch {
 			// not JSON: keep the status text
 		}
-		throw new ApiError(`${method} ${path}: ${res.status} ${code ?? ''} ${message}`.replace('  ', ' '), {
+		const text = [`${method} ${path}:`, res.status, code, message].filter(Boolean).join(' ');
+		// 429 means slow down, not give up.
+		throw new ApiError(text, {
 			status: res.status,
 			code,
-			transient: res.status >= 500
+			transient: res.status >= 500 || res.status === 429
 		});
 	}
 }

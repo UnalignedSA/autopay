@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { step, Fatal, type ApiLike, type Payer } from '../src/autopay.ts';
+import { step, watchLoop, Fatal, type ApiLike, type Outcome, type Payer } from '../src/autopay.ts';
 import { ApiError, type Deposit, type Invoice } from '../src/api.ts';
 import type { Config } from '../src/config.ts';
 import { StateStore, type Topup } from '../src/state.ts';
@@ -224,6 +224,7 @@ test('T7b: sends older than 24 hours do not count', async () => {
 		version: 1,
 		topups: [record({ id: 'old', phase: 'done', result: 'paid', amountUsd: 45, sentAt: NOW - 25 * HOUR })]
 	});
+	api.next = { ...invoice('inv-1'), amountUsd: 10, amountCrypto: '10.00' };
 	assert.equal((await run(config({ topupUsd: 10, maxPerDayUsd: 50 }))).type, 'sent');
 });
 
@@ -248,7 +249,9 @@ test('T8: a deposit method sends the amount 1:1 and waits for the credit', async
 	assert.equal(topups()[0]?.result, 'credited');
 });
 
-test('T9: DRY_RUN creates the payment but sends nothing and writes no state', async () => {
+test('T9: DRY_RUN creates the payment but sends nothing and leaves the state file unchanged', async () => {
+	store.save({ version: 1, topups: [record({ id: 'old', phase: 'done', result: 'paid' })] });
+	const before = readFileSync(path, 'utf8');
 	const lines: string[] = [];
 	const outcome = await step(
 		config({ dryRun: true }),
@@ -261,7 +264,7 @@ test('T9: DRY_RUN creates the payment but sends nothing and writes no state', as
 	assert.equal(outcome.type, 'idle');
 	assert.equal(api.created.length, 1);
 	assert.equal(payer.sent.length, 0);
-	assert.throws(() => readFileSync(path));
+	assert.equal(readFileSync(path, 'utf8'), before);
 	assert.ok(lines.includes('would send 50.00 USDT on bsc to 0xinvoice'));
 });
 
@@ -295,4 +298,148 @@ test('T13: a 503 is a retry, not a failure', async () => {
 test('T14: a 401 is fatal', async () => {
 	api.balanceValue = new ApiError('unauthorized', { status: 401, code: 'unauthorized', transient: false });
 	await assert.rejects(run(), Fatal);
+});
+
+test('T14b: a 403 is fatal and explains the reseller case', async () => {
+	api.balanceValue = new ApiError('forbidden', { status: 403, code: 'forbidden', transient: false });
+	await assert.rejects(run(), (err: Error) => err instanceof Fatal && /reseller/.test(err.message));
+});
+
+test('a 429 is a retry', async () => {
+	api.balanceValue = new ApiError('slow down', { status: 429, transient: true });
+	assert.equal((await run()).type, 'retry');
+});
+
+test('a refunded invoice is done', async () => {
+	store.save({ version: 1, topups: [record({ phase: 'sent', txid: '0xold', sentAt: NOW })] });
+	api.statuses.set('inv-1', 'refunded');
+	await run();
+	assert.equal(topups()[0]?.phase, 'done');
+	assert.equal(topups()[0]?.result, 'refunded');
+});
+
+test('a created invoice that is not waiting any more is not paid again', async () => {
+	store.save({ version: 1, topups: [record({ phase: 'created' })] });
+	api.statuses.set('inv-1', 'confirming');
+	assert.equal((await run()).type, 'pending');
+	assert.equal(payer.sent.length, 0);
+});
+
+test('the daily cap counts a hand-edited record that has no sentAt', async () => {
+	store.save({
+		version: 1,
+		topups: [
+			record({
+				id: 'old',
+				phase: 'done',
+				result: 'paid',
+				amountUsd: 45,
+				txid: '0xold',
+				createdAt: NOW - 2 * HOUR
+			})
+		]
+	});
+	assert.equal((await run(config({ topupUsd: 10, maxPerDayUsd: 50 }))).type, 'dailyCap');
+	assert.ok(!api.calls.includes('create'));
+});
+
+test('an expired record that never sent anything does not count towards the cap', async () => {
+	store.save({
+		version: 1,
+		topups: [
+			record({ id: 'old', phase: 'done', result: 'expired', amountUsd: 45, createdAt: NOW - 2 * HOUR })
+		]
+	});
+	api.next = { ...invoice('inv-1'), amountUsd: 10, amountCrypto: '10.00' };
+	assert.equal((await run(config({ topupUsd: 10, maxPerDayUsd: 50 }))).type, 'sent');
+});
+
+test('an invoice that is not what was asked for is never paid', async () => {
+	for (const wrong of [{ coin: 'USDC' }, { network: 'ethereum' }, { amountUsd: 5000 }]) {
+		api.next = { ...invoice('inv-x'), ...wrong };
+		await assert.rejects(run(), Fatal, JSON.stringify(wrong));
+	}
+	assert.equal(payer.sent.length, 0);
+	assert.throws(() => readFileSync(path));
+});
+
+test('a deposit on the wrong network is never paid', async () => {
+	const cfg = config({
+		network: 'solana',
+		method: { coin: 'USDT', network: 'solana', kind: 'deposit', min_usd: 1, max_usd: null }
+	});
+	api.next = { ...deposit(), coins: ['USDC'] };
+	await assert.rejects(run(cfg), Fatal);
+	assert.equal(payer.sent.length, 0);
+});
+
+test('a state file with a malformed record is fatal', async () => {
+	const good = record({});
+	const bad: Record<string, unknown>[] = [
+		{ ...good, phase: 'sendng' },
+		{ ...good, network: 7 },
+		{ ...good, txid: 5 },
+		{ ...good, sentAt: '1793925000000' },
+		{ ...good, expiresAt: 'soon' },
+		{ ...good, coin: undefined }
+	];
+	for (const rec of bad) {
+		writeFileSync(path, JSON.stringify({ version: 1, topups: [rec] }));
+		await assert.rejects(run(), Fatal, JSON.stringify(rec));
+	}
+	assert.deepEqual(api.calls, []);
+});
+
+test('watch runs cycle after cycle, tolerates a retry, and stops on a manual check', async () => {
+	const outcomes: Outcome[] = [
+		{ type: 'idle' },
+		{ type: 'retry', reason: 'x' },
+		{ type: 'idle' },
+		{ type: 'manualCheck', reason: 'y' }
+	];
+	let runs = 0;
+	const sleeps: number[] = [];
+	const code = await watchLoop(
+		() => Promise.resolve(outcomes[runs++] as Outcome),
+		(ms) => {
+			sleeps.push(ms);
+			return Promise.resolve();
+		},
+		() => 60,
+		() => false
+	);
+	assert.equal(code, 3);
+	assert.equal(runs, 4);
+	assert.deepEqual(sleeps, [60_000, 60_000, 60_000]);
+});
+
+test('watch stops with 0 when asked to', async () => {
+	let stop = false;
+	let runs = 0;
+	const code = await watchLoop(
+		() => {
+			runs++;
+			return Promise.resolve({ type: 'idle' });
+		},
+		() => {
+			stop = true;
+			return Promise.resolve();
+		},
+		() => 60,
+		() => stop
+	);
+	assert.equal(code, 0);
+	assert.equal(runs, 1);
+});
+
+test('watch lets a Fatal error through', async () => {
+	await assert.rejects(
+		watchLoop(
+			() => Promise.reject(new Fatal('bad key')),
+			() => Promise.resolve(),
+			() => 60,
+			() => false
+		),
+		Fatal
+	);
 });

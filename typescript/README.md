@@ -3,7 +3,7 @@
 The reference implementation. See the [main README](../README.md) for what it does, every setting,
 the state file and the safety notes.
 
-Needs Node 22.18 or newer (it runs TypeScript tests directly).
+Needs Node 22.18 or newer: the tests are TypeScript files that Node runs directly, with no extra tool.
 
 ```sh
 npm install

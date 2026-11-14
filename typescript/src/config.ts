@@ -21,6 +21,9 @@ export interface Config {
 	tokenAddress?: string;
 }
 
+/** Config minus the payment method, which needs the API. */
+export type Settings = Omit<Config, 'method'>;
+
 type Env = Record<string, string | undefined>;
 
 /** The wallet variables each network needs. */
@@ -33,32 +36,23 @@ const WALLET_VARS: Record<string, string[]> = {
 	monero: ['MONERO_WALLET_RPC_URL']
 };
 
-/** Reads and validates the environment. `methods` is the answer of GET /payments/methods. */
-export function loadConfig(env: Env, methods: Method[]): Config {
+/** The API base URL: UNALIGNED_API or the public default, without a trailing slash. */
+export function apiBase(env: Env): string {
+	return (env.UNALIGNED_API || DEFAULT_API).replace(/\/+$/, '');
+}
+
+/** Everything that can be checked without asking the API. Run it before any network call. */
+export function preflight(env: Env): Settings {
 	const key = required(env, 'UNALIGNED_KEY');
 	const network = required(env, 'NETWORK').toLowerCase();
 	const coin = required(env, 'COIN').toUpperCase();
-
 	if (network === 'tron') throw new ConfigError('Tron is not supported by this example yet');
-	const method = methods.find((m) => m.network === network && m.coin === coin);
-	if (!method) {
-		const pairs = methods.map((m) => `${m.coin}/${m.network}`).join(', ');
-		throw new ConfigError(`${coin} on ${network} is not offered. Valid COIN/NETWORK pairs: ${pairs}`);
-	}
 
 	const thresholdUsd = Number(required(env, 'THRESHOLD_USD'));
 	if (!Number.isFinite(thresholdUsd) || thresholdUsd <= 0) {
 		throw new ConfigError('THRESHOLD_USD must be a number above 0');
 	}
-
 	const topupUsd = wholeNumber(env, 'TOPUP_USD');
-	if (topupUsd < method.min_usd) {
-		throw new ConfigError(`TOPUP_USD must be at least ${method.min_usd} for ${coin} on ${network}`);
-	}
-	if (method.max_usd !== null && topupUsd > method.max_usd) {
-		throw new ConfigError(`TOPUP_USD must be at most ${method.max_usd} for ${coin} on ${network}`);
-	}
-
 	const maxPerDayUsd = wholeNumber(env, 'MAX_PER_DAY_USD');
 	if (maxPerDayUsd < topupUsd) throw new ConfigError('MAX_PER_DAY_USD must be at least TOPUP_USD');
 
@@ -71,10 +65,9 @@ export function loadConfig(env: Env, methods: Method[]): Config {
 
 	return {
 		key,
-		api: (env.UNALIGNED_API || DEFAULT_API).replace(/\/+$/, ''),
+		api: apiBase(env),
 		network,
 		coin,
-		method,
 		thresholdUsd,
 		topupUsd,
 		maxPerDayUsd,
@@ -84,6 +77,25 @@ export function loadConfig(env: Env, methods: Method[]): Config {
 		stateFile: env.STATE_FILE || './autopay-state.json',
 		tokenAddress: env.TOKEN_ADDRESS || undefined
 	};
+}
+
+/** Reads and validates the environment. `methods` is the answer of GET /payments/methods. */
+export function loadConfig(env: Env, methods: Method[]): Config {
+	const cfg = preflight(env);
+	const { network, coin, topupUsd } = cfg;
+
+	const method = methods.find((m) => m.network === network && m.coin === coin);
+	if (!method) {
+		const pairs = methods.map((m) => `${m.coin}/${m.network}`).join(', ');
+		throw new ConfigError(`${coin} on ${network} is not offered. Valid COIN/NETWORK pairs: ${pairs}`);
+	}
+	if (topupUsd < method.min_usd) {
+		throw new ConfigError(`TOPUP_USD must be at least ${method.min_usd} for ${coin} on ${network}`);
+	}
+	if (method.max_usd !== null && topupUsd > method.max_usd) {
+		throw new ConfigError(`TOPUP_USD must be at most ${method.max_usd} for ${coin} on ${network}`);
+	}
+	return { ...cfg, method };
 }
 
 function required(env: Env, name: string): string {
