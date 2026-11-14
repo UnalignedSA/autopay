@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autopay"
+version = "0.1.0"
+description = "Keeps an Unaligned balance topped up, in crypto, with no one watching."
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.28",
+    "web3>=7",
+    "solana>=0.36",
+    "solders>=0.26",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "ruff>=0.8",
+]
+
+[tool.setuptools]
+packages = ["autopay", "autopay.payers"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+# Nested `with` reads better than one long line where a stub server wraps an expected error.
+"tests/*" = ["SIM117"]
