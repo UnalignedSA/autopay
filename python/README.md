@@ -13,7 +13,9 @@ python -m autopay watch                      # runs until stopped
 ```
 
 The program loads `.env` from the current folder if there is one. A variable already set in the
-environment is never overridden by the file.
+environment is never overridden by the file. The file is read by a few lines of `__main__.py`: `$NAME` is
+not expanded, and an unquoted value ends at ` #`. Wrap any value that contains `#`, `$`, spaces or quotes
+in single quotes; it is then taken literally.
 
 ```sh
 pytest                                       # unit tests, no network

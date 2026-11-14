@@ -15,7 +15,8 @@ DRY_RUN=1 ./target/release/autopay once   # prints what it would send
 The program loads `.env` from the current folder if there is one. A variable already set in the
 environment is never overridden by the file. The file is read by a few lines of `config.rs`, not by a
 library: values are taken literally (`$NAME` is not expanded, as some `.env` libraries do), and may be
-wrapped in single or double quotes. An unquoted value ends at ` #`.
+wrapped in single or double quotes. An unquoted value ends at ` #`. Wrap any value that contains `#`, `$`,
+spaces or quotes in single quotes, as the main README advises for every language.
 
 ```sh
 cargo test                                         # unit tests, no network

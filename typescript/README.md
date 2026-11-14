@@ -13,7 +13,9 @@ DRY_RUN=1 npm start -- once # prints what it would send
 npm start -- watch          # runs until stopped
 ```
 
-`npm start` loads `.env` from this folder if there is one.
+`npm start` loads `.env` from this folder if there is one (Node's `--env-file-if-exists`). Node ends an
+unquoted value at `#`: wrap any value that contains `#`, `$`, spaces or quotes in single quotes, which Node
+takes literally.
 
 ```sh
 npm test       # unit tests, no network

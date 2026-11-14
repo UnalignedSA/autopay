@@ -4,7 +4,7 @@ Plain Node.js (ES modules, no build step, no TypeScript), with JSDoc types where
 behaves exactly like the [TypeScript reference](../typescript). See the [main README](../README.md) for
 what it does, every setting, the state file and the safety notes.
 
-Needs Node 22 or newer.
+Needs Node 22.9 or newer (for `--env-file-if-exists`).
 
 ```sh
 npm install
@@ -13,7 +13,9 @@ DRY_RUN=1 npm start -- once  # prints what it would send
 npm start -- watch           # runs until stopped
 ```
 
-`npm start` loads `.env` from this folder if there is one. You can also run `node src/main.js once`
+`npm start` loads `.env` from this folder if there is one (Node's `--env-file-if-exists`). Node ends an
+unquoted value at `#`: wrap any value that contains `#`, `$`, spaces or quotes in single quotes, which Node
+takes literally. You can also run `node src/main.js once`
 yourself with the variables set in the environment.
 
 ```sh

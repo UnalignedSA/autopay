@@ -5,16 +5,19 @@ Ethereum and BSC, and `solana-go` for Solana. It behaves exactly like the [TypeS
 See the [main README](../README.md) for what it does, every setting, the state file and the safety notes.
 
 ```sh
+go build -o autopay ./cmd/autopay
 cp ../.env.example .env                      # then edit it
-DRY_RUN=1 go run ./cmd/autopay once          # prints what it would send
-go run ./cmd/autopay watch                   # runs until stopped (Ctrl-C or SIGTERM)
-
-go build -o autopay ./cmd/autopay            # or build a binary
+DRY_RUN=1 ./autopay once                     # prints what it would send
+./autopay watch                              # runs until stopped (Ctrl-C or SIGTERM)
 ```
+
+Run the built binary, not `go run`: `go run` turns any failure of the program into exit code `1`, so a
+manual check (exit `3`) would look like a fatal error.
 
 The program loads `.env` from the current folder if there is one (with
 [godotenv](https://github.com/joho/godotenv)). A variable already set in the environment is never
-overridden by the file.
+overridden by the file. godotenv expands `$NAME` in unquoted and double-quoted values: wrap any value that
+contains `#`, `$`, spaces or quotes in single quotes, which godotenv takes literally.
 
 ```sh
 go test ./...                                # unit tests, no network
