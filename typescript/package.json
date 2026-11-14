@@ -21,5 +21,11 @@
 		"prettier": "^3.10.1",
 		"typescript": "^6.0.3",
 		"typescript-eslint": "^8.72.2"
+	},
+	"dependencies": {
+		"@solana/spl-token": "^0.4.15",
+		"@solana/web3.js": "^1.99.0",
+		"bs58": "^6.0.0",
+		"viem": "^2.57.19"
 	}
 }

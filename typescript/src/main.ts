@@ -10,12 +10,8 @@ import {
 	type Payer
 } from './autopay.ts';
 import { apiBase, ConfigError, loadConfig, preflight, type Config } from './config.ts';
+import { makePayer } from './payers/index.ts';
 import { StateStore } from './state.ts';
-
-/** Builds the wallet for the configured network. The chain code comes later. */
-function makePayer(_cfg: Config, _env: NodeJS.ProcessEnv): Payer {
-	throw new Error('not implemented');
-}
 
 interface Session {
 	cfg: Config;
