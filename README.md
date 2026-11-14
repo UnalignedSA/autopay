@@ -34,8 +34,8 @@ integer arithmetic.
 
 ## Configuration
 
-Environment variables (a `.env` file is not read by the programs themselves: export it or use your
-process manager, see [`.env.example`](.env.example)).
+Environment variables, see [`.env.example`](.env.example). The programs read the real environment;
+each language's README says how to load a `.env` file.
 
 | Variable | Default | Notes |
 |---|---|---|
@@ -117,8 +117,7 @@ This program moves real money without asking. Treat it like that.
 
 - **Use a dedicated wallet** that holds little more than a few top-ups. Never point it at your main
   wallet. The private key sits in an environment variable.
-- **`MAX_PER_DAY_USD` is your ceiling.** Whatever goes wrong (a price bug, a loop, a stolen key is a
-  different story), the program will not send more than this in 24 hours.
+- **`MAX_PER_DAY_USD` is your ceiling.** Whatever goes wrong (a bug, a loop, a repeated failure), the program will not send more than this in 24 hours.
 - **Start with `DRY_RUN=1`.** It creates a payment (an unpaid invoice just expires), prints what it
   would send, and sends nothing.
 - **A payment close to expiry is not sent.** After a restart, an invoice with less than 5 minutes left

@@ -1,0 +1,25 @@
+{
+	"name": "unaligned-autopay",
+	"version": "0.1.0",
+	"description": "Tops up an Unaligned balance in crypto when it runs low.",
+	"license": "MIT",
+	"private": true,
+	"type": "module",
+	"engines": {
+		"node": ">=22.18"
+	},
+	"scripts": {
+		"build": "tsc -p tsconfig.build.json",
+		"test": "node --test test/*.test.ts",
+		"lint": "tsc --noEmit && eslint . && prettier --check .",
+		"start": "node --env-file-if-exists=.env dist/main.js"
+	},
+	"devDependencies": {
+		"@eslint/js": "^10.0.1",
+		"@types/node": "^26.6.6",
+		"eslint": "^10.15.0",
+		"prettier": "^3.10.1",
+		"typescript": "^6.0.3",
+		"typescript-eslint": "^8.72.2"
+	}
+}
