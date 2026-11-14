@@ -1,5 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { ConfigError, loadConfig, preflight } from '../src/config.ts';
 import type { Method } from '../src/api.ts';
 
@@ -117,4 +121,21 @@ test('TOKEN_ADDRESS with a native coin is rejected', () => {
 	assert.doesNotThrow(() =>
 		preflight({ ...base, TOKEN_ADDRESS: '0x1111111111111111111111111111111111111111' })
 	);
+});
+
+test('.env: a single-quoted value is taken literally by the loader `npm start` uses', () => {
+	const dir = mkdtempSync(join(tmpdir(), 'autopay-env-'));
+	try {
+		const file = join(dir, '.env');
+		writeFileSync(file, `QUOTED='p#ss $HOME "q" x'\nBARE=p#ss\n`);
+		const script = 'console.log(JSON.stringify([process.env.QUOTED, process.env.BARE]))';
+		const run = spawnSync(process.execPath, [`--env-file-if-exists=${file}`, '-e', script], {
+			encoding: 'utf8',
+			env: {}
+		});
+		// Unquoted, everything from the `#` on is a comment: hence the advice to quote.
+		assert.deepEqual(JSON.parse(run.stdout), ['p#ss $HOME "q" x', 'p']);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
 });

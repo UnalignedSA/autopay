@@ -2,7 +2,7 @@ import { createPublicClient, createWalletClient, defineChain, getAddress, http, 
 import { privateKeyToAccount } from 'viem/accounts';
 import type { Payer } from '../autopay.ts';
 import { toBaseUnits } from '../amounts.ts';
-import { NATIVE_COIN } from '../config.ts';
+import { ConfigError, NATIVE_COIN } from '../config.ts';
 
 /**
  * `transfer` declares no outputs on purpose: Ethereum USDT returns nothing, and viem would fail to decode a
@@ -41,6 +41,23 @@ const TOKENS: Record<string, Record<string, string>> = {
 
 const NATIVE_DECIMALS = 18;
 
+/** The chain id of each mainnet. */
+const MAINNET_CHAIN_ID: Record<string, number> = { ethereum: 1, bsc: 56 };
+
+/**
+ * Refuses a node of the other mainnet: chain id 1 when NETWORK is bsc, 56 when it is ethereum. A payment
+ * signed there would go out on the wrong chain. Any other chain id is allowed, so test chains still work.
+ */
+export function checkChainId(network: string, chainId: number): void {
+	for (const [other, id] of Object.entries(MAINNET_CHAIN_ID)) {
+		if (other !== network && id === chainId) {
+			throw new ConfigError(
+				`EVM_RPC_URL is a ${other} node (chain id ${chainId}), but NETWORK is ${network}`
+			);
+		}
+	}
+}
+
 export interface EvmOptions {
 	rpcUrl: string;
 	privateKey: string;
@@ -52,6 +69,7 @@ export interface EvmOptions {
 export class EvmPayer implements Payer {
 	private readonly account;
 	private readonly transport;
+	private readonly client;
 
 	private readonly opts: EvmOptions;
 
@@ -60,6 +78,12 @@ export class EvmPayer implements Payer {
 		const key = opts.privateKey.startsWith('0x') ? opts.privateKey : `0x${opts.privateKey}`;
 		this.account = privateKeyToAccount(key as Hex);
 		this.transport = http(opts.rpcUrl);
+		this.client = createPublicClient({ transport: this.transport });
+	}
+
+	/** Reads the node's chain id once at start, so a wrong node is refused before any payment is created. */
+	async check(): Promise<void> {
+		checkChainId(this.opts.network, await this.client.getChainId());
 	}
 
 	address(): Promise<string> {
@@ -77,8 +101,9 @@ export class EvmPayer implements Payer {
 
 	async send(to: string, coin: string, amountCrypto: string): Promise<string> {
 		const recipient = getAddress(to);
-		const publicClient = createPublicClient({ transport: this.transport });
-		const chainId = await publicClient.getChainId();
+		// Checked again here: nothing is signed for the wrong chain, even if the node changed since the start.
+		const chainId = await this.client.getChainId();
+		checkChainId(this.opts.network, chainId);
 		const chain = defineChain({
 			id: chainId,
 			name: this.opts.network,
@@ -96,7 +121,7 @@ export class EvmPayer implements Payer {
 			});
 		} else {
 			const address = getAddress(token);
-			const decimals = await publicClient.readContract({ address, abi: ERC20_ABI, functionName: 'decimals' });
+			const decimals = await this.client.readContract({ address, abi: ERC20_ABI, functionName: 'decimals' });
 			hash = await wallet.writeContract({
 				address,
 				abi: ERC20_ABI,
@@ -104,7 +129,7 @@ export class EvmPayer implements Payer {
 				args: [recipient, toBaseUnits(amountCrypto, decimals)]
 			});
 		}
-		const receipt = await publicClient.waitForTransactionReceipt({ hash, confirmations: 1 });
+		const receipt = await this.client.waitForTransactionReceipt({ hash, confirmations: 1 });
 		if (receipt.status !== 'success') throw new Error(`transaction ${hash} reverted`);
 		return hash;
 	}

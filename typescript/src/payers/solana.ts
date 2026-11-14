@@ -2,7 +2,9 @@ import {
 	createAssociatedTokenAccountIdempotentInstruction,
 	createTransferCheckedInstruction,
 	getAssociatedTokenAddressSync,
-	getMint
+	getMint,
+	TOKEN_2022_PROGRAM_ID,
+	TOKEN_PROGRAM_ID
 } from '@solana/spl-token';
 import {
 	Connection,
@@ -23,6 +25,19 @@ const MINTS: Record<string, string> = {
 };
 
 const SOL_DECIMALS = 9;
+const U64_MAX = 2n ** 64n - 1n;
+
+/** Solana amounts are 64-bit: a larger one is refused, never cut down to fit. */
+export function toU64(units: bigint): bigint {
+	if (units > U64_MAX) throw new Error(`${units} base units do not fit in 64 bits`);
+	return units;
+}
+
+/** The token program that owns a mint: classic or Token-2022. An account owned by anything else is no mint. */
+export function tokenProgram(mintAddress: string, owner: PublicKey): PublicKey {
+	if (owner.equals(TOKEN_PROGRAM_ID) || owner.equals(TOKEN_2022_PROGRAM_ID)) return owner;
+	throw new Error(`${mintAddress} is not a token mint (its owner is ${owner.toBase58()})`);
+}
 
 /** A base58 secret key, or the JSON byte array that solana-keygen writes. */
 export function parseSolanaKey(text: string): Uint8Array {
@@ -72,28 +87,29 @@ export class SolanaPayer implements Payer {
 				SystemProgram.transfer({
 					fromPubkey: owner,
 					toPubkey: recipient,
-					lamports: toBaseUnits(amountCrypto, SOL_DECIMALS)
+					lamports: toU64(toBaseUnits(amountCrypto, SOL_DECIMALS))
 				})
 			);
 		} else {
 			const mint = new PublicKey(mintAddress);
 			const info = await this.connection.getAccountInfo(mint);
 			if (!info) throw new Error(`token mint ${mintAddress} not found`);
-			// The mint's owner is the token program (classic or Token-2022).
-			const mintInfo = await getMint(this.connection, mint, 'confirmed', info.owner);
-			const from = getAssociatedTokenAddressSync(mint, owner, false, info.owner);
-			const dest = getAssociatedTokenAddressSync(mint, recipient, true, info.owner);
+			const program = tokenProgram(mintAddress, info.owner);
+			const mintInfo = await getMint(this.connection, mint, 'confirmed', program);
+			if (!mintInfo.isInitialized) throw new Error(`token mint ${mintAddress} is not initialized`);
+			const from = getAssociatedTokenAddressSync(mint, owner, false, program);
+			const dest = getAssociatedTokenAddressSync(mint, recipient, true, program);
 			tx.add(
-				createAssociatedTokenAccountIdempotentInstruction(owner, dest, recipient, mint, info.owner),
+				createAssociatedTokenAccountIdempotentInstruction(owner, dest, recipient, mint, program),
 				createTransferCheckedInstruction(
 					from,
 					mint,
 					dest,
 					owner,
-					toBaseUnits(amountCrypto, mintInfo.decimals),
+					toU64(toBaseUnits(amountCrypto, mintInfo.decimals)),
 					mintInfo.decimals,
 					[],
-					info.owner
+					program
 				)
 			);
 		}

@@ -3,9 +3,12 @@ import type { Config } from './config.ts';
 import { StateError, type State, type StateStore, type Topup } from './state.ts';
 
 const MINUTE = 60_000;
-const DAY = 24 * 60 * MINUTE;
+const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
 /** An invoice with less time left than this is not paid: the payment could land after it expires. */
 const MIN_TIME_LEFT = 5 * MINUTE;
+/** A deposit not credited this long after the send needs a person to look at it. */
+export const DEPOSIT_CREDIT_WAIT = 2 * HOUR;
 
 /** The part of the API that `step` uses. `Api` implements it; tests use a fake. */
 export interface ApiLike {
@@ -21,6 +24,11 @@ export interface Payer {
 	address(): Promise<string>;
 	/** Sends `amountCrypto` (a decimal string) of `coin` to `to`. Returns the transaction id. */
 	send(to: string, coin: string, amountCrypto: string): Promise<string>;
+	/**
+	 * Checks the wallet's node once, before any payment is created. Throws a ConfigError when the node can
+	 * never be right (an EVM node of the other mainnet). Wallets with nothing to check leave it out.
+	 */
+	check?(): Promise<void>;
 }
 
 /** What one cycle did. */
@@ -88,10 +96,16 @@ async function cycle(
 			'a send may or may not have gone out: check the wallet, then edit the state file'
 		);
 	}
-	if (open?.phase === 'sent') return follow(api, state, store, open, out);
+	if (open?.phase === 'sent') return follow(api, state, store, open, now, out);
 
 	if (open) {
-		// Created but not sent: the program stopped between the two.
+		// Created but not sent: the program stopped between the two. Never pay it with another wallet.
+		if (open.network !== cfg.network || open.coin !== cfg.coin) {
+			throw new Fatal(
+				`invoice ${open.id} waits for ${open.coin} on ${open.network}, but the configuration says ` +
+					`${cfg.coin} on ${cfg.network}: set them back until it is done, or close it in the state file`
+			);
+		}
 		const invoice = await api.getPayment(open.id);
 		if (invoice.status === 'expired' || invoice.status === 'paid' || invoice.status === 'refunded') {
 			finish(state, store, open, invoice.status, out);
@@ -225,12 +239,13 @@ async function send(
 		);
 	}
 
+	// Logged before the save: if the save fails, the transaction id is still on screen.
+	out(`sent ${txid}`);
 	topup.phase = 'sent';
 	topup.txid = txid;
 	topup.sentAt = now();
 	if (topup.kind === 'deposit') topup.id = `deposit:${txid}`;
 	store.save(state);
-	out(`sent ${txid}`);
 	return { type: 'sent' };
 }
 
@@ -240,6 +255,7 @@ async function follow(
 	state: State,
 	store: StateStore,
 	topup: Topup,
+	now: () => number,
 	out: Log
 ): Promise<Outcome> {
 	if (topup.kind === 'deposit') {
@@ -247,6 +263,15 @@ async function follow(
 		if (deposits.find((d) => d.txHash === topup.txid)?.credited) {
 			finish(state, store, topup, 'credited', out);
 			return { type: 'idle' };
+		}
+		// A deposit is listed once its transaction is seen on chain. One still missing after hours was most
+		// likely dropped, or went somewhere else: waiting longer will not tell.
+		if (now() - (sendTime(topup) ?? topup.createdAt) > DEPOSIT_CREDIT_WAIT) {
+			return manualCheck(
+				out,
+				`deposit ${topup.txid} is not credited 2 hours after the send: look the transaction up on chain, ` +
+					'then edit the state file'
+			);
 		}
 		out(`waiting ${topup.id} (not credited yet)`);
 		return { type: 'pending' };
@@ -293,6 +318,8 @@ export async function watchLoop(
 	while (!stopped()) {
 		const outcome = await run();
 		if (outcome.type === 'manualCheck') return EXIT_MANUAL_CHECK;
+		// A signal that came during the cycle stops the loop now, not one interval later.
+		if (stopped()) break;
 		await sleep(intervalSeconds() * 1000);
 	}
 	return 0;

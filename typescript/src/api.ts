@@ -52,8 +52,13 @@ export class Api {
 	}
 
 	async balance(): Promise<number> {
-		const body = (await this.#request('GET', '/balance')) as { balance: number };
-		return body.balance;
+		const body = (await this.#request('GET', '/balance')) as { balance?: unknown } | null;
+		const balance = body?.balance;
+		// A 2xx without a usable number is a glitch, never a zero balance.
+		if (typeof balance !== 'number' || !Number.isFinite(balance)) {
+			throw new ApiError('GET /balance: the answer has no balance', { status: 200, transient: true });
+		}
+		return balance;
 	}
 
 	/** Public: sent without the key. */

@@ -13,6 +13,20 @@ import { apiBase, ConfigError, loadConfig, preflight, type Config } from './conf
 import { makePayer } from './payers/index.ts';
 import { StateStore } from './state.ts';
 
+/** The wallet's node did not answer at start. Like the API being down, it is tried again on the next tick. */
+class WalletUnreachable extends Error {}
+
+/** Checks the wallet's node: a wrong node is fatal, one that does not answer is retried. */
+async function checkWallet(payer: Payer): Promise<void> {
+	try {
+		await payer.check?.();
+	} catch (err) {
+		if (err instanceof ConfigError) throw err;
+		const message = err instanceof Error ? (err.message.split('\n')[0] ?? '') : String(err);
+		throw new WalletUnreachable(`wallet RPC: ${message}`);
+	}
+}
+
 interface Session {
 	cfg: Config;
 	api: Api;
@@ -27,6 +41,8 @@ async function setUp(env: NodeJS.ProcessEnv): Promise<Session> {
 	let cfg = loadConfig(env, methods);
 	const api = new Api(cfg.api, cfg.key);
 	const payer = makePayer(cfg, env);
+	// Before any payment is created: an EVM node of the other mainnet stops the program here.
+	await checkWallet(payer);
 	// An incomplete payment goes back to the wallet itself unless told otherwise.
 	if (
 		!cfg.refundAddress &&
@@ -50,7 +66,7 @@ async function main(): Promise<number> {
 		try {
 			session ??= await setUp(process.env);
 		} catch (err) {
-			if (err instanceof ApiError && err.transient) {
+			if ((err instanceof ApiError && err.transient) || err instanceof WalletUnreachable) {
 				log(`retry: ${err.message}`);
 				return { type: 'retry', reason: err.message };
 			}

@@ -19,6 +19,15 @@ before(async () => {
 			res.writeHead(200, { 'Content-Length': '100' });
 			res.write('{"balance"');
 			setTimeout(() => res.destroy(), 20);
+		} else if (path.startsWith('/odd/')) {
+			// A 2xx body without a usable balance.
+			const bodies: Record<string, string> = {
+				'/odd/empty/balance': '{}',
+				'/odd/null/balance': 'null',
+				'/odd/text/balance': '{"balance":"12.5"}',
+				'/odd/infinite/balance': '{"balance":1e999}'
+			};
+			res.writeHead(200, { 'Content-Type': 'application/json' }).end(bodies[path] ?? '');
 		} else if (path === '/balance') {
 			res.writeHead(200, { 'Content-Type': 'application/json' }).end('{"balance": 12.5}');
 		} else if (path === '/payments/methods') {
@@ -73,6 +82,16 @@ test('a non-JSON or cut-off 200 body is a transient error', async () => {
 			new Api(base, 'k').getPayment(id),
 			(err: ApiError) => err instanceof ApiError && err.transient,
 			id
+		);
+	}
+});
+
+test('a 2xx /balance without a finite number is a transient error, never a balance', async () => {
+	for (const odd of ['empty', 'null', 'text', 'infinite']) {
+		await assert.rejects(
+			new Api(`${base}/odd/${odd}`, 'k').balance(),
+			(err: ApiError) => err instanceof ApiError && err.transient,
+			odd
 		);
 	}
 });

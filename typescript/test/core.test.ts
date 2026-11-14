@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { step, watchLoop, Fatal, type ApiLike, type Outcome, type Payer } from '../src/autopay.ts';
 import { ApiError, type Deposit, type Invoice } from '../src/api.ts';
 import type { Config } from '../src/config.ts';
-import { StateStore, type Topup } from '../src/state.ts';
+import { StateError, StateStore, type State, type Topup } from '../src/state.ts';
 
 const NOW = 1_800_000_000_000;
 const MINUTE = 60_000;
@@ -373,6 +373,72 @@ test('a deposit on the wrong network is never paid', async () => {
 	assert.equal(payer.sent.length, 0);
 });
 
+test('a created invoice for another network or coin than the configuration is never paid', async () => {
+	for (const other of [{ network: 'ethereum' }, { coin: 'USDC' }]) {
+		store.save({ version: 1, topups: [record({ phase: 'created', ...other })] });
+		await assert.rejects(run(), (err: Error) => err instanceof Fatal && /inv-1/.test(err.message));
+	}
+	assert.deepEqual(api.calls, []);
+	assert.equal(payer.sent.length, 0);
+	assert.equal(topups()[0]?.phase, 'created');
+});
+
+test('the transaction id is logged even when the save after the send fails', async () => {
+	/** Fails to save the record once it is `sent`: the save after the send. */
+	class FailingStore extends StateStore {
+		override save(state: State): void {
+			if (state.topups.some((t) => t.phase === 'sent')) throw new StateError('disk full');
+			super.save(state);
+		}
+	}
+	const failing = new FailingStore(path);
+	const lines: string[] = [];
+	await assert.rejects(
+		step(
+			config(),
+			api,
+			payer,
+			failing,
+			() => NOW,
+			(l) => lines.push(l)
+		),
+		(err: Error) => err instanceof Fatal && /disk full/.test(err.message)
+	);
+	assert.equal(payer.sent.length, 1);
+	assert.ok(lines.includes('sent 0xtxid'), lines.join('\n'));
+});
+
+test('a deposit still not credited 2 hours after the send needs a manual check', async () => {
+	const cfg = config({
+		network: 'solana',
+		method: { coin: 'USDT', network: 'solana', kind: 'deposit', min_usd: 1, max_usd: null }
+	});
+	const sent = record({
+		id: 'deposit:0xtxid',
+		kind: 'deposit',
+		network: 'solana',
+		amountCrypto: '50',
+		address: 'SoLaddress',
+		expiresAt: null,
+		phase: 'sent',
+		txid: '0xtxid',
+		sentAt: NOW - 2 * HOUR
+	});
+	store.save({ version: 1, topups: [sent] });
+	assert.equal((await run(cfg)).type, 'pending');
+
+	store.save({ version: 1, topups: [{ ...sent, sentAt: NOW - 2 * HOUR - 1 }] });
+	const outcome = await run(cfg);
+	assert.equal(outcome.type, 'manualCheck');
+	assert.match(outcome.type === 'manualCheck' ? outcome.reason : '', /0xtxid.*2 hours/);
+	assert.equal(topups()[0]?.phase, 'sent');
+
+	// Credited late is still credited.
+	api.deposits = [{ txHash: '0xtxid', credited: true }];
+	assert.equal((await run(cfg)).type, 'idle');
+	assert.equal(topups()[0]?.result, 'credited');
+});
+
 test('a state file with a malformed record is fatal', async () => {
 	const good = record({});
 	const bad: Record<string, unknown>[] = [
@@ -430,6 +496,25 @@ test('watch stops with 0 when asked to', async () => {
 	);
 	assert.equal(code, 0);
 	assert.equal(runs, 1);
+});
+
+test('watch stops at once after a cycle during which a signal came', async () => {
+	let stop = false;
+	const sleeps: number[] = [];
+	const code = await watchLoop(
+		() => {
+			stop = true;
+			return Promise.resolve({ type: 'idle' });
+		},
+		(ms) => {
+			sleeps.push(ms);
+			return Promise.resolve();
+		},
+		() => 60,
+		() => stop
+	);
+	assert.equal(code, 0);
+	assert.deepEqual(sleeps, []);
 });
 
 test('watch lets a Fatal error through', async () => {
