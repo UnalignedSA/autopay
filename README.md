@@ -7,13 +7,13 @@ A small program checks your balance. When it drops below a threshold, it asks th
 and follows it until it is credited. The same program is provided in five languages, each in its own
 folder, with the same configuration, the same behaviour and the same state file:
 
-| Folder | Language |
-|---|---|
-| [`typescript/`](typescript) | TypeScript (reference) |
-| `javascript/` | JavaScript |
-| `python/` | Python |
-| `go/` | Go |
-| `rust/` | Rust |
+| Folder | Language | Run |
+|---|---|---|
+| [`typescript/`](typescript) | TypeScript (reference), Node 22.18+ | `npm install && npm run build && npm start -- watch` |
+| [`node/`](node) | JavaScript, Node 22+ | `npm install && npm start -- watch` |
+| [`python/`](python) | Python 3.11+ | `pip install -e . && python -m autopay watch` |
+| [`go/`](go) | Go 1.25+ | `go run ./cmd/autopay watch` |
+| [`rust/`](rust) | Rust 1.98.1+ | `cargo build --release && ./target/release/autopay watch` |
 
 Read one, run one, or copy the parts you need into your own code.
 
@@ -35,7 +35,9 @@ integer arithmetic.
 ## Configuration
 
 Environment variables, see [`.env.example`](.env.example). The programs read the real environment;
-each language's README says how to load a `.env` file.
+from inside a language folder, copy `.env.example` to `.env` there: every program loads a `.env` file from its
+folder (or the current folder) if there is one, and a variable already set in the environment is never
+overridden by the file. Each language's README has the details.
 
 | Variable | Default | Notes |
 |---|---|---|
