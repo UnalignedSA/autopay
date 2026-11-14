@@ -8,10 +8,12 @@ See the [main README](../README.md) for what it does, every setting, the state f
 python -m venv .venv && . .venv/bin/activate
 pip install -e '.[dev]'
 cp ../.env.example .env                      # then edit it
-set -a; . ./.env; set +a                     # the program reads the real environment
 DRY_RUN=1 python -m autopay once             # prints what it would send
 python -m autopay watch                      # runs until stopped
 ```
+
+The program loads `.env` from the current folder if there is one. A variable already set in the
+environment is never overridden by the file.
 
 ```sh
 pytest                                       # unit tests, no network

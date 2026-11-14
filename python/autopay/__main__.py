@@ -6,13 +6,46 @@ import sys
 import threading
 import time
 import traceback
+from collections.abc import Mapping, MutableMapping
 from dataclasses import dataclass, replace
+from pathlib import Path
 
 from .api import Api, ApiError
 from .config import Config, ConfigError, api_base, load_config, preflight
 from .core import EXIT_FATAL, EXIT_MANUAL_CHECK, Fatal, Outcome, Payer, Status, eprint, log, step, watch_loop
 from .payers import make_payer
 from .state import StateStore
+
+
+def parse_env_file(text: str) -> dict[str, str]:
+    """`KEY=VALUE` lines. Blank lines and `#` comments are skipped, `export ` is optional, and a value may be
+    wrapped in single or double quotes (which are removed)."""
+    values: dict[str, str] = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        line = line.removeprefix("export ").lstrip()
+        key, sep, value = line.partition("=")
+        key, value = key.strip(), value.strip()
+        if not sep or not key:
+            continue
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        else:
+            value = value.split(" #", 1)[0].rstrip()
+        values[key] = value
+    return values
+
+
+def load_env_file(path: str | Path, env: MutableMapping[str, str]) -> None:
+    """Adds the variables of `path` to `env`, if the file exists. A variable that is already set wins."""
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return
+    for key, value in parse_env_file(text).items():
+        env.setdefault(key, value)
 
 
 @dataclass
@@ -23,7 +56,7 @@ class Session:
     store: StateStore
 
 
-def set_up(env: dict[str, str] | os._Environ[str]) -> Session:
+def set_up(env: Mapping[str, str]) -> Session:
     """Checks the environment, then asks the API for the payment methods.
 
     Nothing leaves the machine before the checks pass.
@@ -45,6 +78,7 @@ def main(argv: list[str]) -> int:
         eprint("usage: python -m autopay once | python -m autopay watch")
         return EXIT_FATAL
 
+    load_env_file(".env", os.environ)
     session: Session | None = None
 
     def cycle() -> Outcome:

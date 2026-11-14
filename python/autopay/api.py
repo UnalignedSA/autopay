@@ -1,6 +1,7 @@
 """The Unaligned API calls. One method per endpoint."""
 
 import json
+import math
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -71,7 +72,8 @@ class Api:
         self._key = key
 
     def balance(self) -> float:
-        return float_or_int(self._request("GET", "/balance")["balance"])
+        answer = self._request("GET", "/balance")
+        return self._parse("GET /balance", lambda: finite_number(answer["balance"]))
 
     def methods(self) -> list[Method]:
         """Public: sent without the key."""
@@ -81,9 +83,13 @@ class Api:
     def create_payment(self, body: dict[str, Any]) -> Invoice | Deposit:
         """201 with an invoice, or 200 with the account's fixed deposit address."""
         answer = self._request("POST", "/payments", body)
-        if answer.get("kind") == "deposit" or "coins" in answer:
-            return self._parse("POST /payments", lambda: parse_deposit(answer))
-        return self._parse("POST /payments", lambda: parse_invoice(answer))
+
+        def build() -> Invoice | Deposit:
+            if answer.get("kind") == "deposit" or "coins" in answer:
+                return parse_deposit(answer)
+            return parse_invoice(answer)
+
+        return self._parse("POST /payments", build)
 
     def get_payment(self, payment_id: str) -> Invoice:
         path = f"/payments/{quote(payment_id, safe='')}"
@@ -142,9 +148,10 @@ def error_text(err: Exception) -> str:
     return str(err) or type(err).__name__
 
 
-def float_or_int(value: Any) -> float:
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        raise ApiError(f"unexpected balance: {value!r}", status=200, transient=True)
+def finite_number(value: Any) -> float:
+    """A JSON number. Python's json also reads NaN and Infinity, which are not valid amounts."""
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
+        raise ValueError(f"not a finite number: {value!r}")
     return value
 
 

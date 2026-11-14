@@ -2,6 +2,7 @@ import json
 import threading
 import time
 from collections.abc import Iterator
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
@@ -71,6 +72,25 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
+@contextmanager
+def serve(body: str) -> Iterator[str]:
+    """A server that answers every request with 200 and `body`."""
+
+    class Fixed(Handler):
+        def do_GET(self) -> None:
+            self.reply(200, body)
+
+        do_POST = do_GET
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Fixed)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 @pytest.fixture(scope="module")
 def base() -> Iterator[str]:
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -112,6 +132,22 @@ def test_a_429_is_transient(base: str) -> None:
 def test_a_non_json_or_cut_off_200_body_is_a_transient_error(base: str, payment_id: str) -> None:
     with pytest.raises(ApiError) as err:
         Api(base, "k").get_payment(payment_id)
+    assert err.value.transient
+
+
+@pytest.mark.parametrize(
+    "answer", ["{}", "[]", "null", '{"balance": "x"}', '{"balance": NaN}', '{"balance": Infinity}']
+)
+def test_a_balance_that_is_not_a_finite_number_is_a_transient_error(answer: str) -> None:
+    with serve(answer) as base, pytest.raises(ApiError) as err:
+        Api(base, "k").balance()
+    assert err.value.transient
+
+
+@pytest.mark.parametrize("answer", ["[]", "null", "{}", '{"kind":"deposit"}'])
+def test_a_malformed_payment_answer_is_a_transient_error(answer: str) -> None:
+    with serve(answer) as base, pytest.raises(ApiError) as err:
+        Api(base, "k").create_payment({})
     assert err.value.transient
 
 
