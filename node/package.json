@@ -1,6 +1,6 @@
 {
 	"name": "unaligned-autopay",
-	"version": "0.1.0",
+	"version": "1.0.0",
 	"description": "Tops up an Unaligned balance in crypto when it runs low.",
 	"license": "MIT",
 	"private": true,

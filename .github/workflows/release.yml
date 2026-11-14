@@ -1,0 +1,165 @@
+name: Release
+
+# Push a tag like v1.0.0 to build every language and publish a GitHub release.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - { os: linux, arch: amd64 }
+          - { os: linux, arch: arm64 }
+          - { os: darwin, arch: amd64 }
+          - { os: darwin, arch: arm64 }
+          - { os: windows, arch: amd64 }
+          - { os: windows, arch: arm64 }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+      - name: Build
+        working-directory: go
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.target.os }}
+          GOARCH: ${{ matrix.target.arch }}
+        run: |
+          ext=""; [ "$GOOS" = windows ] && ext=".exe"
+          go build -trimpath -ldflags "-s -w" -o "../out/autopay$ext" ./cmd/autopay
+      - name: Package
+        env:
+          NAME: autopay-${{ github.ref_name }}-go-${{ matrix.target.os }}-${{ matrix.target.arch }}
+          GOOS: ${{ matrix.target.os }}
+        run: |
+          mkdir -p "dist/$NAME"
+          cp out/* README.md LICENSE .env.example "dist/$NAME/"
+          cd dist
+          if [ "$GOOS" = windows ]; then zip -qr "$NAME.zip" "$NAME"; else tar -czf "$NAME.tar.gz" "$NAME"; fi
+          rm -r "$NAME"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: go-${{ matrix.target.os }}-${{ matrix.target.arch }}
+          path: dist/*
+
+  rust:
+    runs-on: ${{ matrix.target.runner }}
+    strategy:
+      matrix:
+        target:
+          - { runner: ubuntu-latest, triple: x86_64-unknown-linux-gnu, name: linux-amd64 }
+          - { runner: macos-latest, triple: aarch64-apple-darwin, name: darwin-arm64 }
+          - { runner: macos-latest, triple: x86_64-apple-darwin, name: darwin-amd64 }
+          - { runner: windows-latest, triple: x86_64-pc-windows-msvc, name: windows-amd64 }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+          targets: ${{ matrix.target.triple }}
+      - name: Build
+        working-directory: rust
+        run: cargo build --release --locked --target ${{ matrix.target.triple }}
+      - name: Package
+        shell: bash
+        env:
+          NAME: autopay-${{ github.ref_name }}-rust-${{ matrix.target.name }}
+          TRIPLE: ${{ matrix.target.triple }}
+        run: |
+          mkdir -p "dist/$NAME"
+          if [ "$RUNNER_OS" = Windows ]; then bin=autopay.exe; else bin=autopay; fi
+          cp "rust/target/$TRIPLE/release/$bin" README.md LICENSE .env.example "dist/$NAME/"
+          cd dist
+          if [ "$RUNNER_OS" = Windows ]; then 7z a -bso0 "$NAME.zip" "$NAME"; else tar -czf "$NAME.tar.gz" "$NAME"; fi
+          rm -r "$NAME"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rust-${{ matrix.target.name }}
+          path: dist/*
+
+  typescript:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22.18"
+          cache: npm
+          cache-dependency-path: typescript/package-lock.json
+      - name: Build
+        working-directory: typescript
+        run: npm ci && npm run build
+      - name: Package
+        env:
+          NAME: autopay-${{ github.ref_name }}-typescript
+        run: |
+          mkdir -p "dist/$NAME"
+          cp -r typescript/dist typescript/package.json typescript/package-lock.json typescript/README.md "dist/$NAME/"
+          cp LICENSE .env.example "dist/$NAME/"
+          cd dist && zip -qr "$NAME.zip" "$NAME" && rm -r "$NAME"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: typescript
+          path: dist/*
+
+  node:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Package
+        env:
+          NAME: autopay-${{ github.ref_name }}-node
+        run: |
+          mkdir -p "dist/$NAME"
+          cp -r node/src node/package.json node/package-lock.json node/README.md "dist/$NAME/"
+          cp LICENSE .env.example "dist/$NAME/"
+          cd dist && zip -qr "$NAME.zip" "$NAME" && rm -r "$NAME"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: node
+          path: dist/*
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Build wheel and sdist
+        working-directory: python
+        run: |
+          pip install build
+          python -m build --outdir ../dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: python
+          path: dist/*
+
+  release:
+    needs: [go, rust, typescript, node, python]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum * > SHA256SUMS && cat SHA256SUMS
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" dist/* --title "Autopay $TAG" --notes-file .github/release-notes.md --verify-tag
