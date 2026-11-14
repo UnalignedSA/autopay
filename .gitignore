@@ -1,0 +1,8 @@
+.env
+autopay-state.json
+node_modules
+target
+__pycache__
+.venv
+bin/
+dist/
