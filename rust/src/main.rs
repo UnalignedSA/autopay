@@ -31,6 +31,19 @@ struct Session {
 enum SetupError {
     Api(ApiError),
     Config(ConfigError),
+    /// The wallet's node did not answer. Like the API being down, it is tried again on the next tick.
+    WalletUnreachable(String),
+}
+
+/// Checks the wallet's node: a wrong node is fatal, one that does not answer is retried.
+async fn check_wallet(payer: &dyn Payer) -> Result<(), SetupError> {
+    match payer.check().await {
+        Ok(()) => Ok(()),
+        Err(err) => match err.downcast::<ConfigError>() {
+            Ok(config) => Err(SetupError::Config(config)),
+            Err(err) => Err(SetupError::WalletUnreachable(format!("{err:#}"))),
+        },
+    }
 }
 
 /// Asks the API for the payment methods, then builds the wallet. The environment was checked before.
@@ -38,6 +51,8 @@ async fn set_up(settings: &Settings, env: &Env) -> Result<Session, SetupError> {
     let methods = Api::new(&settings.api, None).methods().await.map_err(SetupError::Api)?;
     let mut cfg = config::load_config(env, &methods).map_err(SetupError::Config)?;
     let payer = payers::make_payer(&cfg, env).map_err(SetupError::Config)?;
+    // Before any payment is created: an EVM node of the other mainnet stops the program here.
+    check_wallet(payer.as_ref()).await?;
     // An incomplete payment goes back to the wallet itself unless told otherwise.
     let s = &mut cfg.settings;
     if s.refund_address.is_none() && matches!(s.network.as_str(), "ethereum" | "bsc" | "solana") {
@@ -66,6 +81,10 @@ async fn cycle(session: &mut Option<Session>, settings: &Settings, env: &Env) ->
             Err(SetupError::Api(err)) if err.transient => {
                 log(&format!("retry: {err}"));
                 return Ok(Outcome::Retry(err.message));
+            }
+            Err(SetupError::WalletUnreachable(reason)) => {
+                log(&format!("retry: {reason}"));
+                return Ok(Outcome::Retry(reason));
             }
             Err(SetupError::Api(err)) => return Err(Fatal(err.message)),
             Err(SetupError::Config(err)) => return Err(Fatal(err.0)),

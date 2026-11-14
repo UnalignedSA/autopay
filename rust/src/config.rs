@@ -411,7 +411,7 @@ mod tests {
         let path = dir.join(".env");
         std::fs::write(
             &path,
-            "# a comment\n\nexport A=1\nB = two words # note\nC=\"quoted # kept\"\nD='single $HOME'\n\
+            "# a comment\n\nexport A=1\nB = two words # note\nC=\"quoted # kept\"\nD='p#ss $HOME \"q\" x'\n\
              E=$HOME\nKEPT=from file\nEMPTY=\n",
         )
         .unwrap();
@@ -420,7 +420,7 @@ mod tests {
         assert_eq!(env["A"], "1");
         assert_eq!(env["B"], "two words");
         assert_eq!(env["C"], "quoted # kept");
-        assert_eq!(env["D"], "single $HOME");
+        assert_eq!(env["D"], "p#ss $HOME \"q\" x");
         assert_eq!(env["E"], "$HOME");
         assert_eq!(env["KEPT"], "from env");
         assert_eq!(env["EMPTY"], "");

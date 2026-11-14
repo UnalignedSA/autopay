@@ -10,9 +10,12 @@ use crate::payers::Payer;
 use crate::state::{Phase, State, StateError, StateStore, Topup, TopupKind};
 
 const MINUTE: i64 = 60_000;
-const DAY: i64 = 24 * 60 * MINUTE;
+const HOUR: i64 = 60 * MINUTE;
+const DAY: i64 = 24 * HOUR;
 /// An invoice with less time left than this is not paid: the payment could land after it expires.
 const MIN_TIME_LEFT: i64 = 5 * MINUTE;
+/// A deposit not credited this long after the send needs a person to look at it.
+const DEPOSIT_CREDIT_WAIT: i64 = 2 * HOUR;
 
 pub const EXIT_FATAL: i32 = 1;
 pub const EXIT_MANUAL_CHECK: i32 = 3;
@@ -121,10 +124,18 @@ async fn cycle(
                 "a send may or may not have gone out: check the wallet, then edit the state file".into(),
             ));
         }
-        Some(i) if state.topups[i].phase == Phase::Sent => return follow(api, &mut state, store, i, out).await,
+        Some(i) if state.topups[i].phase == Phase::Sent => return follow(api, &mut state, store, i, now, out).await,
         Some(i) => {
-            // Created but not sent: the program stopped between the two.
+            // Created but not sent: the program stopped between the two. Never pay it with another wallet.
             let topup = &state.topups[i];
+            if topup.network != s.network || topup.coin != s.coin {
+                return Err(Fatal(format!(
+                    "invoice {} waits for {} on {}, but the configuration says {} on {}: \
+                     set them back until it is done, or close it in the state file",
+                    topup.id, topup.coin, topup.network, s.coin, s.network
+                ))
+                .into());
+            }
             let invoice = api.get_payment(&topup.id).await?;
             if matches!(invoice.status.as_str(), "expired" | "paid" | "refunded") {
                 finish(&mut state, store, i, &invoice.status, out)?;
@@ -295,15 +306,16 @@ async fn send(
         }
     };
 
+    // Logged before the save: if the save fails, the transaction id is still on screen.
+    out(&format!("sent {txid}"));
     let topup = &mut state.topups[index];
     topup.phase = Phase::Sent;
     topup.sent_at = Some(now());
     if topup.kind == TopupKind::Deposit {
         topup.id = format!("deposit:{txid}");
     }
-    topup.txid = Some(txid.clone());
+    topup.txid = Some(txid);
     store.save(state)?;
-    out(&format!("sent {txid}"));
     Ok(Outcome::Sent)
 }
 
@@ -313,6 +325,7 @@ async fn follow(
     state: &mut State,
     store: &StateStore,
     index: usize,
+    now: &impl Fn() -> i64,
     out: &dyn Fn(&str),
 ) -> Result<Outcome, StepError> {
     let topup = &state.topups[index];
@@ -326,6 +339,18 @@ async fn follow(
         if credited {
             finish(state, store, index, "credited", out)?;
             return Ok(Outcome::Idle);
+        }
+        // A deposit is listed once its transaction is seen on chain. One still missing after hours was most
+        // likely dropped, or went somewhere else: waiting longer will not tell.
+        if now() - topup.sent_at.unwrap_or(topup.created_at) > DEPOSIT_CREDIT_WAIT {
+            return Ok(manual_check(
+                out,
+                format!(
+                    "deposit {} is not credited 2 hours after the send: look the transaction up on chain, \
+                     then edit the state file",
+                    topup.txid.as_deref().unwrap_or_default()
+                ),
+            ));
         }
         out(&format!("waiting {} (not credited yet)", topup.id));
         return Ok(Outcome::Pending);
@@ -404,7 +429,6 @@ mod tests {
     use crate::state::tests::TempDir;
 
     const NOW: i64 = 1_800_000_000_000;
-    const HOUR: i64 = 60 * MINUTE;
 
     enum Created {
         Invoice(Invoice),
@@ -486,6 +510,8 @@ mod tests {
     struct FakePayer {
         sent: Mutex<Vec<(String, String, String)>>,
         fail_with: Mutex<Option<String>>,
+        /// After a payment, a directory is made at this path (to make the next save fail).
+        block_after_send: Mutex<Option<std::path::PathBuf>>,
     }
 
     impl FakePayer {
@@ -504,6 +530,9 @@ mod tests {
                 anyhow::bail!(message);
             }
             self.sent.lock().unwrap().push((to.into(), coin.into(), amount.into()));
+            if let Some(path) = self.block_after_send.lock().unwrap().as_ref() {
+                std::fs::create_dir(path).unwrap();
+            }
             Ok("0xtxid".into())
         }
     }
@@ -1140,6 +1169,81 @@ mod tests {
         .await;
         assert_eq!(code, Ok(0));
         assert_eq!(runs.get(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_created_invoice_for_another_network_or_coin_than_the_configuration_is_never_paid() {
+        for (network, coin) in [("ethereum", "USDT"), ("bsc", "USDC")] {
+            let w = World::new();
+            w.save(vec![Topup {
+                network: network.into(),
+                coin: coin.into(),
+                ..record()
+            }]);
+            let err = w.run_default().await.unwrap_err();
+            assert!(err.0.contains("inv-1"), "{err}");
+            assert!(w.api.calls().is_empty());
+            assert!(w.payer.sent().is_empty());
+            assert_eq!(w.topups()[0].phase, Phase::Created);
+        }
+    }
+
+    #[tokio::test]
+    async fn the_transaction_id_is_logged_even_when_the_save_after_the_send_fails() {
+        let w = World::new();
+        // A directory where the temp file should go makes the save after the send fail.
+        let mut tmp = w.path().into_os_string();
+        tmp.push(".tmp");
+        *w.payer.block_after_send.lock().unwrap() = Some(tmp.into());
+        let lines = RefCell::new(Vec::new());
+        let result = step_with_log(&w.config(), &w.api, &w.payer, &w.store, || NOW, &|line| {
+            lines.borrow_mut().push(line.to_string())
+        })
+        .await;
+        assert!(result.is_err());
+        assert_eq!(w.payer.sent().len(), 1);
+        assert!(
+            lines.borrow().contains(&"sent 0xtxid".to_string()),
+            "{:?}",
+            lines.borrow()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_deposit_still_not_credited_2_hours_after_the_send_needs_a_manual_check() {
+        let w = World::new();
+        let cfg = w.solana(50);
+        let sent = |sent_at| Topup {
+            id: "deposit:0xtxid".into(),
+            kind: TopupKind::Deposit,
+            network: "solana".into(),
+            amount_crypto: "50".into(),
+            address: "SoLaddress".into(),
+            expires_at: None,
+            phase: Phase::Sent,
+            txid: Some("0xtxid".into()),
+            sent_at: Some(sent_at),
+            ..record()
+        };
+        w.save(vec![sent(NOW - 2 * HOUR)]);
+        assert_eq!(w.run(&cfg).await, Ok(Outcome::Pending));
+
+        w.save(vec![sent(NOW - 2 * HOUR - 1)]);
+        match w.run(&cfg).await {
+            Ok(Outcome::ManualCheck(reason)) => {
+                assert!(reason.contains("0xtxid") && reason.contains("2 hours"), "{reason}")
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(w.topups()[0].phase, Phase::Sent);
+
+        // Credited late is still credited.
+        *w.api.deposits.borrow_mut() = vec![DepositEntry {
+            tx_hash: "0xtxid".into(),
+            credited: true,
+        }];
+        assert_eq!(w.run(&cfg).await, Ok(Outcome::Idle));
+        assert_eq!(w.topups()[0].result.as_deref(), Some("credited"));
     }
 
     #[tokio::test]

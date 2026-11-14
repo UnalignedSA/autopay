@@ -29,6 +29,18 @@ const NATIVE_DECIMALS: u32 = 18;
 const RECEIPT_TIMEOUT: Duration = Duration::from_secs(300);
 const RECEIPT_POLL: Duration = Duration::from_millis(500);
 
+/// Refuses a node of the other mainnet: chain id 1 when NETWORK is bsc, 56 when it is ethereum. A payment signed
+/// there would go out on the wrong chain. Any other chain id is allowed, so test chains still work.
+pub fn check_chain_id(network: &str, chain_id: u64) -> Result<(), ConfigError> {
+    const MAINNETS: [(&str, u64); 2] = [("ethereum", 1), ("bsc", 56)];
+    match MAINNETS.iter().find(|&&(other, id)| other != network && id == chain_id) {
+        Some((other, _)) => Err(ConfigError(format!(
+            "EVM_RPC_URL is a {other} node (chain id {chain_id}), but NETWORK is {network}"
+        ))),
+        None => Ok(()),
+    }
+}
+
 fn token_table(network: &str, coin: &str) -> Option<&'static str> {
     match (network, coin) {
         ("ethereum", "USDT") => Some("0xdAC17F958D2ee523a2206206994597C13D831ec7"),
@@ -112,6 +124,13 @@ impl Payer for EvmPayer {
         Ok(self.signer.address().to_checksum(None))
     }
 
+    /// Reads the node's chain id once at start, so a wrong node is refused before any payment is created.
+    async fn check(&self) -> anyhow::Result<()> {
+        let provider = ProviderBuilder::new().connect_http(self.rpc_url.clone());
+        let chain_id = provider.get_chain_id().await.context("EVM RPC")?;
+        Ok(check_chain_id(&self.network, chain_id)?)
+    }
+
     /// Pays the native coin or a token with EIP-1559 fees (the chain id is read from the RPC), then waits for
     /// one confirmation. Fails if the receipt status is not 1.
     async fn send(&self, to: &str, coin: &str, amount: &str) -> anyhow::Result<String> {
@@ -120,6 +139,8 @@ impl Payer for EvmPayer {
         let provider = ProviderBuilder::new()
             .wallet(self.signer.clone())
             .connect_http(self.rpc_url.clone());
+        // Checked again here: nothing is signed for the wrong chain, even if the node changed since the start.
+        check_chain_id(&self.network, provider.get_chain_id().await.context("EVM RPC")?)?;
 
         let hash = match token {
             None => {
@@ -177,6 +198,7 @@ async fn wait_for_receipt(provider: &impl Provider, hash: B256) -> anyhow::Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::{json, stub};
     use alloy::sol_types::SolCall;
 
     const OVERRIDE: &str = "0x1111111111111111111111111111111111111111";
@@ -246,6 +268,43 @@ mod tests {
     #[tokio::test]
     async fn an_unreachable_rpc_fails_before_anything_is_sent() {
         let err = payer("ethereum", None).send(OVERRIDE, "ETH", "1").await.unwrap_err();
-        assert!(format!("{err:#}").contains("sending the transaction"), "{err:#}");
+        assert!(format!("{err:#}").contains("EVM RPC"), "{err:#}");
+    }
+
+    #[test]
+    fn a_node_of_the_other_mainnet_is_refused_other_chain_ids_are_allowed() {
+        assert!(check_chain_id("bsc", 1).is_err());
+        let err = check_chain_id("ethereum", 56).unwrap_err();
+        assert!(
+            err.0.contains("chain id 56") && err.0.contains("NETWORK is ethereum"),
+            "{err}"
+        );
+        for (network, id) in [("ethereum", 1), ("bsc", 56), ("ethereum", 31337), ("bsc", 97)] {
+            assert_eq!(check_chain_id(network, id), Ok(()), "{network} {id}");
+        }
+    }
+
+    #[tokio::test]
+    async fn check_and_send_refuse_a_wrong_node_before_anything_is_signed() {
+        let node = stub(|seen, _| {
+            let request: serde_json::Value = serde_json::from_str(&seen.body).unwrap();
+            let answer = serde_json::json!({ "jsonrpc": "2.0", "id": request["id"], "result": "0x1" });
+            json(200, &answer.to_string())
+        })
+        .await;
+        let payer = EvmPayer::new(EvmOptions {
+            rpc_url: node.url.clone(),
+            private_key: format!("0x{}", "11".repeat(32)),
+            network: "bsc".into(),
+            token_address: None,
+        })
+        .unwrap();
+        let err = payer.check().await.unwrap_err();
+        assert!(err.downcast_ref::<ConfigError>().is_some(), "{err:#}");
+        let err = payer.send(OVERRIDE, "BNB", "1").await.unwrap_err();
+        assert!(format!("{err:#}").contains("ethereum node (chain id 1)"), "{err:#}");
+        for seen in node.requests() {
+            assert!(seen.body.contains("eth_chainId"), "{}", seen.body);
+        }
     }
 }

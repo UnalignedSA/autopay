@@ -21,6 +21,11 @@ pub trait Payer: Send + Sync {
     async fn address(&self) -> anyhow::Result<String>;
     /// Sends `amount` (a decimal string) of `coin` to `to`. Returns the transaction id.
     async fn send(&self, to: &str, coin: &str, amount: &str) -> anyhow::Result<String>;
+    /// Checks the wallet's node once, before any payment is created. A [`ConfigError`] in the chain means the
+    /// node can never be right (an EVM node of the other mainnet). Wallets with nothing to check keep this.
+    async fn check(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 /// Builds the wallet for the configured network.
