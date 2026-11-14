@@ -2,6 +2,7 @@ import { createPublicClient, createWalletClient, defineChain, getAddress, http, 
 import { privateKeyToAccount } from 'viem/accounts';
 import type { Payer } from '../autopay.ts';
 import { toBaseUnits } from '../amounts.ts';
+import { NATIVE_COIN } from '../config.ts';
 
 /**
  * `transfer` declares no outputs on purpose: Ethereum USDT returns nothing, and viem would fail to decode a
@@ -65,9 +66,13 @@ export class EvmPayer implements Payer {
 		return Promise.resolve(this.account.address);
 	}
 
-	/** The token contract for a coin, or undefined for the chain's native coin. */
+	/** The token contract for a coin: undefined for the chain's native coin, a throw for an unknown token. */
 	tokenFor(coin: string): string | undefined {
-		return this.opts.tokenAddress ?? TOKENS[this.opts.network]?.[coin];
+		if (NATIVE_COIN[this.opts.network] === coin) return undefined;
+		const token = this.opts.tokenAddress ?? TOKENS[this.opts.network]?.[coin];
+		if (token === undefined)
+			throw new Error(`no token contract known for ${coin} on ${this.opts.network}: set TOKEN_ADDRESS`);
+		return token;
 	}
 
 	async send(to: string, coin: string, amountCrypto: string): Promise<string> {

@@ -1,3 +1,4 @@
+import { Keypair } from '@solana/web3.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -6,7 +7,7 @@ import type { AddressInfo } from 'node:net';
 import { ERC20_ABI, EvmPayer } from '../src/payers/evm.ts';
 import { UtxoPayer } from '../src/payers/utxo.ts';
 import { MoneroPayer } from '../src/payers/monero.ts';
-import { parseSolanaKey } from '../src/payers/solana.ts';
+import { parseSolanaKey, SolanaPayer } from '../src/payers/solana.ts';
 import { makePayer } from '../src/payers/index.ts';
 import type { Config } from '../src/config.ts';
 
@@ -117,6 +118,8 @@ test('monero: digest auth answers the challenge when a user is set', async () =>
 	}
 });
 
+const OVERRIDE = '0x1111111111111111111111111111111111111111';
+
 test('evm: the ERC-20 transfer ABI has no outputs (Ethereum USDT returns nothing)', () => {
 	const transfer = ERC20_ABI.find((e) => e.type === 'function' && e.name === 'transfer');
 	assert.ok(transfer);
@@ -126,9 +129,9 @@ test('evm: the ERC-20 transfer ABI has no outputs (Ethereum USDT returns nothing
 		rpcUrl: 'http://127.0.0.1:1',
 		privateKey: `0x${'11'.repeat(32)}`,
 		network: 'ethereum',
-		tokenAddress: '0xdAC17F958D2ee523a2206206994597C13D831ec7'
+		tokenAddress: OVERRIDE
 	});
-	assert.match(payer.tokenFor('USDT') ?? '', /^0xdAC17F/);
+	assert.equal(payer.tokenFor('USDT'), OVERRIDE);
 });
 
 test('evm: address() is derived from the key', async () => {
@@ -140,6 +143,40 @@ test('evm: address() is derived from the key', async () => {
 	assert.match(await payer.address(), /^0x[0-9a-fA-F]{40}$/);
 	assert.equal(payer.tokenFor('USDC'), '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d');
 	assert.equal(payer.tokenFor('BNB'), undefined);
+	assert.throws(() => payer.tokenFor('DAI'), /no token contract/);
+});
+
+test('evm: a native coin is never a token, even with TOKEN_ADDRESS set; an unknown coin throws', () => {
+	const key = `0x${'11'.repeat(32)}`;
+	const eth = new EvmPayer({
+		rpcUrl: 'http://127.0.0.1:1',
+		privateKey: key,
+		network: 'ethereum',
+		tokenAddress: OVERRIDE
+	});
+	assert.equal(eth.tokenFor('ETH'), undefined);
+	const noOverride = new EvmPayer({ rpcUrl: 'http://127.0.0.1:1', privateKey: key, network: 'ethereum' });
+	assert.equal(noOverride.tokenFor('ETH'), undefined);
+	assert.throws(() => noOverride.tokenFor('DAI'), /TOKEN_ADDRESS/);
+});
+
+test('solana: SOL is native even with TOKEN_ADDRESS set; an unknown coin throws', () => {
+	const key = JSON.stringify([...Keypair.generate().secretKey]);
+	const sol = new SolanaPayer('http://127.0.0.1:1', key, OVERRIDE);
+	assert.equal(sol.mintFor('SOL'), undefined);
+	assert.equal(sol.mintFor('USDT'), OVERRIDE);
+	const plain = new SolanaPayer('http://127.0.0.1:1', key);
+	assert.equal(plain.mintFor('USDC'), 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
+	assert.throws(() => plain.mintFor('DAI'), /TOKEN_ADDRESS/);
+});
+
+test('monero: a non-JSON error page is reported clearly', async () => {
+	const s = await stub(() => [500, { 'content-type': 'text/html' }, '<html>oops</html>']);
+	try {
+		await assert.rejects(new MoneroPayer(`${s.url}/json_rpc`).send('44A', 'XMR', '1'), /HTTP 500.*not JSON/);
+	} finally {
+		s.close();
+	}
 });
 
 test('solana: the key is a base58 secret key or a JSON byte array', () => {

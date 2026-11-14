@@ -80,7 +80,13 @@ export class MoneroPayer implements Payer {
 			res = await post(digestHeader(challenge, this.user, this.password, 'POST', uri));
 		}
 		if (res.status === 401) throw new Error('wallet RPC refused the credentials');
-		const json = (await res.json()) as { result?: { tx_hash?: string }; error?: { message?: string } };
+		const text = await res.text();
+		let json: { result?: { tx_hash?: string }; error?: { message?: string } };
+		try {
+			json = JSON.parse(text) as typeof json;
+		} catch {
+			throw new Error(`wallet RPC answered HTTP ${res.status} with a body that is not JSON`);
+		}
 		if (json.error) throw new Error(`wallet RPC error: ${json.error.message ?? 'unknown'}`);
 		if (!json.result?.tx_hash) throw new Error('wallet RPC returned no transaction hash');
 		return json.result.tx_hash;

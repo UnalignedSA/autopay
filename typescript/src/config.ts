@@ -27,13 +27,23 @@ export type Settings = Omit<Config, 'method'>;
 type Env = Record<string, string | undefined>;
 
 /** The wallet variables each network needs. */
-const WALLET_VARS: Record<string, string[]> = {
+export const WALLET_VARS: Record<string, string[]> = {
 	ethereum: ['EVM_RPC_URL', 'EVM_PRIVATE_KEY'],
 	bsc: ['EVM_RPC_URL', 'EVM_PRIVATE_KEY'],
 	solana: ['SOLANA_RPC_URL', 'SOLANA_PRIVATE_KEY'],
 	bitcoin: ['WALLET_RPC_URL', 'WALLET_RPC_USER', 'WALLET_RPC_PASSWORD'],
 	litecoin: ['WALLET_RPC_URL', 'WALLET_RPC_USER', 'WALLET_RPC_PASSWORD'],
 	monero: ['MONERO_WALLET_RPC_URL']
+};
+
+/** The coin each network's own currency is called. Every other coin is a token. */
+export const NATIVE_COIN: Record<string, string> = {
+	ethereum: 'ETH',
+	bsc: 'BNB',
+	solana: 'SOL',
+	bitcoin: 'BTC',
+	litecoin: 'LTC',
+	monero: 'XMR'
 };
 
 /** The API base URL: UNALIGNED_API or the public default, without a trailing slash. */
@@ -59,6 +69,12 @@ export function preflight(env: Env): Settings {
 	const checkInterval = Number(env.CHECK_INTERVAL || '60');
 	if (!Number.isInteger(checkInterval) || checkInterval < 15) {
 		throw new ConfigError('CHECK_INTERVAL must be a whole number of seconds, at least 15');
+	}
+
+	if (env.TOKEN_ADDRESS && NATIVE_COIN[network] === coin) {
+		throw new ConfigError(
+			`TOKEN_ADDRESS is for tokens: ${coin} is the native coin of ${network}, unset TOKEN_ADDRESS`
+		);
 	}
 
 	for (const name of WALLET_VARS[network] ?? []) required(env, name);

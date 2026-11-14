@@ -15,6 +15,7 @@ import {
 import bs58 from 'bs58';
 import type { Payer } from '../autopay.ts';
 import { toBaseUnits } from '../amounts.ts';
+import { NATIVE_COIN } from '../config.ts';
 
 const MINTS: Record<string, string> = {
 	USDT: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',
@@ -48,6 +49,14 @@ export class SolanaPayer implements Payer {
 		this.connection = new Connection(rpcUrl, 'confirmed');
 	}
 
+	/** The mint for a coin: undefined for SOL, a throw for an unknown token. */
+	mintFor(coin: string): string | undefined {
+		if (coin === NATIVE_COIN.solana) return undefined;
+		const mint = this.tokenAddress ?? MINTS[coin];
+		if (mint === undefined) throw new Error(`no token mint known for ${coin} on solana: set TOKEN_ADDRESS`);
+		return mint;
+	}
+
 	address(): Promise<string> {
 		return Promise.resolve(this.keypair.publicKey.toBase58());
 	}
@@ -57,7 +66,7 @@ export class SolanaPayer implements Payer {
 		const owner = this.keypair.publicKey;
 		const tx = new Transaction();
 
-		const mintAddress = this.tokenAddress ?? MINTS[coin];
+		const mintAddress = this.mintFor(coin);
 		if (mintAddress === undefined) {
 			tx.add(
 				SystemProgram.transfer({

@@ -1,5 +1,5 @@
 import type { Payer } from '../autopay.ts';
-import { ConfigError, type Config } from '../config.ts';
+import { ConfigError, WALLET_VARS, type Config } from '../config.ts';
 import { EvmPayer } from './evm.ts';
 import { MoneroPayer } from './monero.ts';
 import { SolanaPayer } from './solana.ts';
@@ -9,11 +9,11 @@ type Env = Record<string, string | undefined>;
 
 /** Builds the wallet for the configured network. */
 export function makePayer(cfg: Config, env: Env = process.env): Payer {
-	const need = (name: string): string => {
-		const value = env[name];
-		if (!value) throw new ConfigError(`${name} is required`);
-		return value;
-	};
+	// The variables each network needs are listed once, in config.ts.
+	for (const name of WALLET_VARS[cfg.network] ?? []) {
+		if (!env[name]) throw new ConfigError(`${name} is required`);
+	}
+	const need = (name: string): string => env[name] ?? '';
 	switch (cfg.network) {
 		case 'ethereum':
 		case 'bsc':

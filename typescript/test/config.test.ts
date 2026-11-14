@@ -105,3 +105,16 @@ test('preflight checks everything it can without the API', () => {
 	assert.throws(() => preflight({ ...base, EVM_RPC_URL: '' }), /EVM_RPC_URL/);
 	assert.equal(preflight(base).topupUsd, 50);
 });
+
+test('TOKEN_ADDRESS with a native coin is rejected', () => {
+	const env = {
+		...base,
+		NETWORK: 'ethereum',
+		COIN: 'ETH',
+		TOKEN_ADDRESS: '0x1111111111111111111111111111111111111111'
+	};
+	assert.throws(() => preflight(env), /TOKEN_ADDRESS.*native coin/);
+	assert.doesNotThrow(() =>
+		preflight({ ...base, TOKEN_ADDRESS: '0x1111111111111111111111111111111111111111' })
+	);
+});
