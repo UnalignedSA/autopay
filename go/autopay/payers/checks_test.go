@@ -18,7 +18,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/gagliardetto/solana-go"
 
-	"github.com/UnalignedCorp/unaligned-autopay/go/autopay"
+	"github.com/UnalignedSA/autopay/go/autopay"
 )
 
 // rpcNode is a JSON-RPC node that answers each method from answers (echoing the request id) and records the

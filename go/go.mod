@@ -1,4 +1,4 @@
-module github.com/UnalignedCorp/unaligned-autopay/go
+module github.com/UnalignedSA/autopay/go
 
 go 1.25.0
 

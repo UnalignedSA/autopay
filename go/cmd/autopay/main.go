@@ -13,8 +13,8 @@ import (
 
 	"github.com/joho/godotenv"
 
-	"github.com/UnalignedCorp/unaligned-autopay/go/autopay"
-	"github.com/UnalignedCorp/unaligned-autopay/go/autopay/payers"
+	"github.com/UnalignedSA/autopay/go/autopay"
+	"github.com/UnalignedSA/autopay/go/autopay/payers"
 )
 
 // session is everything a cycle needs, built once the API answered.

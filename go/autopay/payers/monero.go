@@ -13,7 +13,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/UnalignedCorp/unaligned-autopay/go/autopay"
+	"github.com/UnalignedSA/autopay/go/autopay"
 )
 
 const moneroDecimals = 12

@@ -14,7 +14,7 @@ import (
 	"github.com/gagliardetto/solana-go/programs/system"
 	"github.com/gagliardetto/solana-go/rpc"
 
-	"github.com/UnalignedCorp/unaligned-autopay/go/autopay"
+	"github.com/UnalignedSA/autopay/go/autopay"
 )
 
 var solanaMints = map[string]string{

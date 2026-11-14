@@ -16,7 +16,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
 
-	"github.com/UnalignedCorp/unaligned-autopay/go/autopay"
+	"github.com/UnalignedSA/autopay/go/autopay"
 )
 
 // erc20JSON declares `transfer` with no outputs on purpose: Ethereum USDT returns nothing, and decoding a

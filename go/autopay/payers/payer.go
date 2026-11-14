@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/UnalignedCorp/unaligned-autopay/go/autopay"
+	"github.com/UnalignedSA/autopay/go/autopay"
 )
 
 // MakePayer builds the wallet for a network from the environment.
