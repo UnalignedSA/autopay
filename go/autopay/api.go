@@ -20,18 +20,19 @@ type Invoice struct {
 	ID           string  `json:"id"`
 	Coin         string  `json:"coin"`
 	Network      string  `json:"network"`
-	AmountUSD    float64 `json:"amountUsd"`
-	AmountCrypto string  `json:"amountCrypto"`
+	AmountUSD    float64 `json:"amount_usd"`
+	AmountCrypto string  `json:"amount_crypto"`
 	Address      string  `json:"address"`
-	CreatedAt    int64   `json:"createdAt"`
-	ExpiresAt    int64   `json:"expiresAt"`
+	// CreatedAt and ExpiresAt are milliseconds since 1970, like every time in the program. The API gives seconds.
+	CreatedAt int64 `json:"created_at"`
+	ExpiresAt int64 `json:"expires_at"`
 	// Status is waiting, confirming, partial, paid, expired or refunded.
 	Status string `json:"status"`
 }
 
 // DepositEntry is one payment seen on the account's deposit address.
 type DepositEntry struct {
-	TxHash   string `json:"txHash"`
+	TxHash   string `json:"tx_hash"`
 	Credited bool   `json:"credited"`
 }
 
@@ -102,15 +103,30 @@ func (c *Client) Balance(ctx context.Context) (float64, error) {
 
 // Methods lists the payment methods. It is public: sent without the key.
 func (c *Client) Methods(ctx context.Context) ([]Method, error) {
-	var methods []Method
-	err := c.request(ctx, http.MethodGet, "/payments/methods", nil, false, &methods)
-	return methods, err
+	var body *struct {
+		Methods []Method `json:"methods"`
+	}
+	if err := c.request(ctx, http.MethodGet, "/payments/methods", nil, false, &body); err != nil {
+		return nil, err
+	}
+	// A 2xx without the list is a glitch, never "nothing is offered".
+	if body == nil || body.Methods == nil {
+		return nil, &APIError{Status: http.StatusOK, Message: "GET /payments/methods: the answer has no methods", Transient: true}
+	}
+	return body.Methods, nil
 }
 
 // CreateInvoice answers 201 with an invoice.
 func (c *Client) CreateInvoice(ctx context.Context, req CreateRequest) (Invoice, error) {
+	return c.invoice(ctx, http.MethodPost, "/payments", req)
+}
+
+// invoice reads an invoice and turns the API's seconds into milliseconds.
+func (c *Client) invoice(ctx context.Context, method, path string, body any) (Invoice, error) {
 	var invoice Invoice
-	err := c.request(ctx, http.MethodPost, "/payments", req, true, &invoice)
+	err := c.request(ctx, method, path, body, true, &invoice)
+	invoice.CreatedAt *= 1000
+	invoice.ExpiresAt *= 1000
 	return invoice, err
 }
 
@@ -123,9 +139,7 @@ func (c *Client) CreateDeposit(ctx context.Context, req CreateRequest) (Deposit,
 
 // GetPayment reads an invoice.
 func (c *Client) GetPayment(ctx context.Context, id string) (Invoice, error) {
-	var invoice Invoice
-	err := c.request(ctx, http.MethodGet, "/payments/"+url.PathEscape(id), nil, true, &invoice)
-	return invoice, err
+	return c.invoice(ctx, http.MethodGet, "/payments/"+url.PathEscape(id), nil)
 }
 
 // Deposit reads the deposit address and its payments.
@@ -184,7 +198,12 @@ func (c *Client) request(ctx context.Context, method, path string, body any, aut
 	if json.Unmarshal(text, &failure) == nil && failure.Error.Message != "" {
 		message = failure.Error.Message
 	}
-	parts := []string{method + " " + path + ":", strconv.Itoa(res.StatusCode), failure.Error.Code, message}
+	// The request id is what support asks for.
+	requestID := res.Header.Get("X-Request-Id")
+	if requestID != "" {
+		requestID = "(request " + requestID + ")"
+	}
+	parts := []string{method + " " + path + ":", strconv.Itoa(res.StatusCode), failure.Error.Code, message, requestID}
 	var kept []string
 	for _, part := range parts {
 		if part != "" {

@@ -29,7 +29,6 @@ pub enum MethodKind {
 
 /// A payment to make to a one-off address.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct Invoice {
     pub id: String,
     pub coin: String,
@@ -37,10 +36,19 @@ pub struct Invoice {
     pub amount_usd: f64,
     pub amount_crypto: String,
     pub address: String,
+    /// Milliseconds since 1970, like every time in the program. The API gives seconds.
+    #[serde(deserialize_with = "seconds_as_milliseconds")]
     pub created_at: i64,
+    #[serde(deserialize_with = "seconds_as_milliseconds")]
     pub expires_at: i64,
     /// waiting, confirming, partial, paid, expired or refunded
     pub status: String,
+}
+
+fn seconds_as_milliseconds<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<i64, D::Error> {
+    i64::deserialize(deserializer)?
+        .checked_mul(1000)
+        .ok_or_else(|| serde::de::Error::custom("a time out of range"))
 }
 
 /// The account's fixed deposit address on a network, with what arrived on it.
@@ -53,7 +61,6 @@ pub struct Deposit {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct DepositEntry {
     pub tx_hash: String,
     pub credited: bool,
@@ -115,8 +122,14 @@ impl Api {
 
     /// Public: sent without the key.
     pub async fn methods(&self) -> Result<Vec<PaymentMethod>, ApiError> {
-        self.request(reqwest::Method::GET, "/payments/methods", None::<&()>, false)
-            .await
+        #[derive(Deserialize)]
+        struct Methods {
+            methods: Vec<PaymentMethod>,
+        }
+        let body: Methods = self
+            .request(reqwest::Method::GET, "/payments/methods", None::<&()>, false)
+            .await?;
+        Ok(body.methods)
     }
 
     async fn request<T: DeserializeOwned>(
@@ -166,6 +179,9 @@ impl Api {
             code: Option<String>,
             message: Option<String>,
         }
+        // The request id is what support asks for.
+        let request_id = res.headers().get("x-request-id").and_then(|v| v.to_str().ok());
+        let request_id = request_id.map(|id| format!("(request {id})")).unwrap_or_default();
         let detail = res.json::<ErrorBody>().await.ok().and_then(|b| b.error);
         let code = detail.as_ref().and_then(|d| d.code.clone());
         let message = detail
@@ -176,6 +192,7 @@ impl Api {
             status.as_u16().to_string(),
             code.clone().unwrap_or_default(),
             message,
+            request_id,
         ];
         let text = parts
             .iter()
@@ -255,6 +272,11 @@ mod tests {
     use super::*;
     use crate::testing::{Reply, json, stub};
 
+    /// What the API answers: snake_case, seconds.
+    const INVOICE: &str = r#"{"kind":"invoice","id":"inv-1","coin":"USDT","network":"bsc","amount_usd":50.0,"amount_crypto":"50.00","address":"0xa","created_at":1793925000,"expires_at":1793926800,"required_confirmations":15,"status":"waiting","payments":[]}"#;
+    /// The same invoice with the field names and milliseconds of the API before 2.0.
+    const OLD_INVOICE: &str = r#"{"kind":"invoice","id":"inv-1","coin":"USDT","network":"bsc","amountUsd":50.0,"amountCrypto":"50.00","address":"0xa","createdAt":1793925000000,"expiresAt":1793926800000,"status":"waiting"}"#;
+
     async fn server() -> crate::testing::Stub {
         stub(|seen, _| match seen.path.as_str() {
             p if p.ends_with("/garbage") => json(200, "<html>"),
@@ -262,10 +284,24 @@ mod tests {
             // Promises more than it sends, then drops the connection.
             p if p.ends_with("/cut") => Reply::Raw("HTTP/1.1 200 OK\r\ncontent-length: 100\r\n\r\n{\"balance\"".into()),
             "/balance" => json(200, r#"{"balance": 12.5}"#),
-            "/payments/methods" => json(200, "[]"),
+            "/payments/methods" => json(
+                200,
+                r#"{"methods":[{"coin":"USDT","network":"bsc","kind":"invoice","min_usd":5.0,"max_usd":null,"rate_usd":1.0,"confirmations":15}]}"#,
+            ),
+            "/payments/inv-1" | "/payments" => json(200, INVOICE),
+            "/payments/old" => json(200, OLD_INVOICE),
+            "/payments/deposit/solana" => json(
+                200,
+                r#"{"kind":"deposit","network":"solana","coins":["USDT","USDC"],"address":"A","min_usd":1.0,"required_confirmations":1,"deposits":[{"coin":"USDT","amount":"5","usd":5.0,"tx_hash":"t1","at":1793925000,"confirmations":3,"credited":true}]}"#,
+            ),
+            p if p.ends_with("/full") => json(409, r#"{"error":{"code":"limit_reached","message":"too many open"}}"#),
             p if p.ends_with("/limited") => json(429, r#"{"error":{"code":"rate_limited","message":"slow"}}"#),
             p if p.ends_with("/down") => Reply::Full(503, vec![], "<html>down</html>".into()),
-            _ => json(400, r#"{"error":{"code":"invalid_input","message":"nope"}}"#),
+            _ => Reply::Full(
+                400,
+                vec![("content-type", "application/json".into()), ("x-request-id", "req_1".into())],
+                r#"{"error":{"code":"invalid_request","message":"nope","request_id":"req_1"}}"#.into(),
+            ),
         })
         .await
     }
@@ -280,19 +316,98 @@ mod tests {
     #[tokio::test]
     async fn methods_is_public_no_authorization_header() {
         let s = server().await;
-        Api::new(&s.url, Some("secret")).methods().await.unwrap();
+        let methods = Api::new(&s.url, Some("secret")).methods().await.unwrap();
         assert_eq!(s.requests()[0].header("authorization"), None);
+        assert_eq!(
+            methods,
+            vec![PaymentMethod {
+                coin: "USDT".into(),
+                network: "bsc".into(),
+                kind: MethodKind::Invoice,
+                min_usd: 5.0,
+                max_usd: None,
+            }]
+        );
     }
 
     #[tokio::test]
-    async fn a_400_carries_the_api_error_code_and_is_not_transient() {
+    async fn a_methods_answer_without_the_list_is_a_transient_error() {
+        for body in ["[]", "null", "{}"] {
+            let s = stub(move |_, _| json(200, body)).await;
+            let err = Api::new(&s.url, None).methods().await.unwrap_err();
+            assert!(err.transient, "{body}: {}", err.message);
+        }
+    }
+
+    #[tokio::test]
+    async fn an_invoice_is_read_from_snake_case_its_seconds_become_milliseconds() {
+        let s = server().await;
+        let api = Api::new(&s.url, Some("k"));
+        let expected = Invoice {
+            id: "inv-1".into(),
+            coin: "USDT".into(),
+            network: "bsc".into(),
+            amount_usd: 50.0,
+            amount_crypto: "50.00".into(),
+            address: "0xa".into(),
+            created_at: 1_793_925_000_000,
+            expires_at: 1_793_926_800_000,
+            status: "waiting".into(),
+        };
+        assert_eq!(api.get_payment("inv-1").await.unwrap(), expected);
+        let request = CreateRequest {
+            amount_usd: Some(50),
+            coin: "USDT".into(),
+            network: "bsc".into(),
+            refund_address: None,
+        };
+        assert_eq!(api.create_invoice(&request).await.unwrap(), expected);
+    }
+
+    #[tokio::test]
+    async fn an_invoice_in_the_old_shape_is_a_transient_error_never_an_invoice() {
+        let s = server().await;
+        let err = Api::new(&s.url, Some("k")).get_payment("old").await.unwrap_err();
+        assert!(err.transient, "{}", err.message);
+    }
+
+    #[tokio::test]
+    async fn a_deposit_address_is_read_with_its_deposits_by_tx_hash() {
+        let s = server().await;
+        let deposit = Api::new(&s.url, Some("k")).deposit("solana").await.unwrap();
+        assert_eq!(
+            deposit,
+            Deposit {
+                network: "solana".into(),
+                coins: vec!["USDT".into(), "USDC".into()],
+                address: "A".into(),
+                deposits: vec![DepositEntry {
+                    tx_hash: "t1".into(),
+                    credited: true,
+                }],
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_400_carries_the_api_error_code_and_the_request_id_and_is_not_transient() {
         let s = server().await;
         let err = Api::new(&s.url, Some("k")).deposit("x").await.unwrap_err();
         assert_eq!(err.status, 400);
-        assert_eq!(err.code.as_deref(), Some("invalid_input"));
+        assert_eq!(err.code.as_deref(), Some("invalid_request"));
         assert!(!err.transient);
-        assert!(err.message.contains("nope"), "{}", err.message);
-        assert_eq!(err.message, "GET /payments/deposit/x: 400 invalid_input nope");
+        assert_eq!(
+            err.message,
+            "GET /payments/deposit/x: 400 invalid_request nope (request req_1)"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_409_too_many_open_invoices_is_not_transient() {
+        let s = server().await;
+        let err = Api::new(&s.url, Some("k")).get_payment("full").await.unwrap_err();
+        assert_eq!((err.status, err.code.as_deref()), (409, Some("limit_reached")));
+        assert!(!err.transient);
     }
 
     #[tokio::test]

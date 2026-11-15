@@ -6,6 +6,7 @@ export interface Method {
 	max_usd: number | null;
 }
 
+/** An invoice as the program keeps it: its own field names, times in milliseconds since 1970. */
 export interface Invoice {
 	kind: 'invoice';
 	id: string;
@@ -63,20 +64,27 @@ export class Api {
 
 	/** Public: sent without the key. */
 	async methods(): Promise<Method[]> {
-		return (await this.#request('GET', '/payments/methods', undefined, false)) as Method[];
+		const what = 'GET /payments/methods';
+		const { methods } = fields(what, await this.#request('GET', '/payments/methods', undefined, false));
+		if (!Array.isArray(methods)) throw unexpected(what, 'methods');
+		return methods as Method[];
 	}
 
 	/** 201 with an invoice, or 200 with the account's fixed deposit address. */
 	async createPayment(body: Record<string, unknown>): Promise<Invoice | Deposit> {
-		return (await this.#request('POST', '/payments', body)) as Invoice | Deposit;
+		const what = 'POST /payments';
+		const raw = fields(what, await this.#request('POST', '/payments', body));
+		return raw.kind === 'deposit' ? parseDeposit(what, raw) : parseInvoice(what, raw);
 	}
 
 	async getPayment(id: string): Promise<Invoice> {
-		return (await this.#request('GET', `/payments/${encodeURIComponent(id)}`)) as Invoice;
+		const path = `/payments/${encodeURIComponent(id)}`;
+		return parseInvoice(`GET ${path}`, fields(`GET ${path}`, await this.#request('GET', path)));
 	}
 
 	async deposit(network: string): Promise<Deposit> {
-		return (await this.#request('GET', `/payments/deposit/${encodeURIComponent(network)}`)) as Deposit;
+		const path = `/payments/deposit/${encodeURIComponent(network)}`;
+		return parseDeposit(`GET ${path}`, fields(`GET ${path}`, await this.#request('GET', path)));
 	}
 
 	async #request(method: string, path: string, body?: unknown, auth = true): Promise<unknown> {
@@ -114,7 +122,11 @@ export class Api {
 		} catch {
 			// not JSON: keep the status text
 		}
-		const text = [`${method} ${path}:`, res.status, code, message].filter(Boolean).join(' ');
+		// The request id is what support asks for.
+		const requestId = res.headers.get('x-request-id');
+		const text = [`${method} ${path}:`, res.status, code, message, requestId && `(request ${requestId})`]
+			.filter(Boolean)
+			.join(' ');
 		// 429 means slow down, not give up.
 		throw new ApiError(text, {
 			status: res.status,
@@ -122,6 +134,62 @@ export class Api {
 			transient: res.status >= 500 || res.status === 429
 		});
 	}
+}
+
+type Fields = Record<string, unknown>;
+
+/** A 2xx answer that is not the documented one is a glitch: tried again later, never read as a payment. */
+function unexpected(what: string, field: string): ApiError {
+	return new ApiError(`${what}: unexpected response: no usable ${field}`, { status: 200, transient: true });
+}
+
+function fields(what: string, value: unknown): Fields {
+	if (typeof value !== 'object' || value === null) throw unexpected(what, 'object');
+	return value as Fields;
+}
+
+function text(what: string, raw: Fields, name: string): string {
+	const value = raw[name];
+	if (typeof value !== 'string') throw unexpected(what, name);
+	return value;
+}
+
+function number(what: string, raw: Fields, name: string): number {
+	const value = raw[name];
+	if (typeof value !== 'number' || !Number.isFinite(value)) throw unexpected(what, name);
+	return value;
+}
+
+/** The API names its fields in snake_case and gives times in seconds. */
+function parseInvoice(what: string, raw: Fields): Invoice {
+	return {
+		kind: 'invoice',
+		id: text(what, raw, 'id'),
+		coin: text(what, raw, 'coin'),
+		network: text(what, raw, 'network'),
+		amountUsd: number(what, raw, 'amount_usd'),
+		amountCrypto: text(what, raw, 'amount_crypto'),
+		address: text(what, raw, 'address'),
+		createdAt: number(what, raw, 'created_at') * 1000,
+		expiresAt: number(what, raw, 'expires_at') * 1000,
+		status: text(what, raw, 'status')
+	};
+}
+
+function parseDeposit(what: string, raw: Fields): Deposit {
+	const { coins, deposits = [] } = raw;
+	if (!Array.isArray(coins) || !coins.every((c) => typeof c === 'string')) throw unexpected(what, 'coins');
+	if (!Array.isArray(deposits)) throw unexpected(what, 'deposits');
+	return {
+		kind: 'deposit',
+		network: text(what, raw, 'network'),
+		coins,
+		address: text(what, raw, 'address'),
+		deposits: deposits.map((d) => {
+			const entry = fields(what, d);
+			return { txHash: text(what, entry, 'tx_hash'), credited: entry.credited === true };
+		})
+	};
 }
 
 function errorText(err: unknown): string {

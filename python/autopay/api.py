@@ -31,6 +31,8 @@ class Method:
 
 @dataclass(frozen=True)
 class Invoice:
+    """An invoice as the program keeps it: times in milliseconds since 1970."""
+
     id: str
     coin: str
     network: str
@@ -78,7 +80,7 @@ class Api:
     def methods(self) -> list[Method]:
         """Public: sent without the key."""
         body = self._request("GET", "/payments/methods", auth=False)
-        return self._parse("GET /payments/methods", lambda: [parse_method(m) for m in body])
+        return self._parse("GET /payments/methods", lambda: [parse_method(m) for m in as_list(body["methods"])])
 
     def create_payment(self, body: dict[str, Any]) -> Invoice | Deposit:
         """201 with an invoice, or 200 with the account's fixed deposit address."""
@@ -134,7 +136,10 @@ class Api:
             message = error.get("message") or message
         except (ValueError, AttributeError):
             pass  # not JSON: keep the status text
-        text = " ".join(str(p) for p in (f"{method} {path}:", res.status_code, code, message) if p)
+        # The request id is what support asks for.
+        request_id = res.headers.get("x-request-id")
+        parts = (f"{method} {path}:", res.status_code, code, message, request_id and f"(request {request_id})")
+        text = " ".join(str(p) for p in parts if p)
         # 429 means slow down, not give up.
         raise ApiError(
             text,
@@ -155,6 +160,19 @@ def finite_number(value: Any) -> float:
     return value
 
 
+def as_list(value: Any) -> list[Any]:
+    if not isinstance(value, list):
+        raise TypeError(f"not a list: {value!r}")
+    return value
+
+
+def milliseconds(seconds: Any) -> int:
+    """The API gives times in whole seconds; the program and its state file count in milliseconds."""
+    if isinstance(seconds, bool) or not isinstance(seconds, int):
+        raise ValueError(f"not a time in seconds: {seconds!r}")
+    return seconds * 1000
+
+
 def parse_method(raw: dict[str, Any]) -> Method:
     return Method(
         coin=raw["coin"],
@@ -170,11 +188,11 @@ def parse_invoice(raw: dict[str, Any]) -> Invoice:
         id=raw["id"],
         coin=raw["coin"],
         network=raw["network"],
-        amount_usd=raw["amountUsd"],
-        amount_crypto=raw["amountCrypto"],
+        amount_usd=raw["amount_usd"],
+        amount_crypto=raw["amount_crypto"],
         address=raw["address"],
-        created_at=raw["createdAt"],
-        expires_at=raw["expiresAt"],
+        created_at=milliseconds(raw["created_at"]),
+        expires_at=milliseconds(raw["expires_at"]),
         status=raw["status"],
     )
 
@@ -184,5 +202,5 @@ def parse_deposit(raw: dict[str, Any]) -> Deposit:
         network=raw["network"],
         coins=list(raw["coins"]),
         address=raw["address"],
-        deposits=[DepositEntry(tx_hash=d["txHash"], credited=d["credited"] is True) for d in raw.get("deposits", [])],
+        deposits=[DepositEntry(tx_hash=d["tx_hash"], credited=d["credited"] is True) for d in raw.get("deposits", [])],
     )

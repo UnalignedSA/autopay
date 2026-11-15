@@ -9,6 +9,7 @@
  */
 
 /**
+ * An invoice as the program keeps it: its own field names, times in milliseconds since 1970.
  * @typedef {object} Invoice
  * @property {'invoice'} kind
  * @property {string} id
@@ -75,7 +76,10 @@ export class Api {
 	 * @returns {Promise<Method[]>}
 	 */
 	async methods() {
-		return await this.#request('GET', '/payments/methods', undefined, false);
+		const what = 'GET /payments/methods';
+		const { methods } = fields(what, await this.#request('GET', '/payments/methods', undefined, false));
+		if (!Array.isArray(methods)) throw unexpected(what, 'methods');
+		return methods;
 	}
 
 	/**
@@ -84,17 +88,21 @@ export class Api {
 	 * @returns {Promise<Invoice | Deposit>}
 	 */
 	async createPayment(body) {
-		return await this.#request('POST', '/payments', body);
+		const what = 'POST /payments';
+		const raw = fields(what, await this.#request('POST', '/payments', body));
+		return raw.kind === 'deposit' ? parseDeposit(what, raw) : parseInvoice(what, raw);
 	}
 
 	/** @param {string} id @returns {Promise<Invoice>} */
 	async getPayment(id) {
-		return await this.#request('GET', `/payments/${encodeURIComponent(id)}`);
+		const path = `/payments/${encodeURIComponent(id)}`;
+		return parseInvoice(`GET ${path}`, fields(`GET ${path}`, await this.#request('GET', path)));
 	}
 
 	/** @param {string} network @returns {Promise<Deposit>} */
 	async deposit(network) {
-		return await this.#request('GET', `/payments/deposit/${encodeURIComponent(network)}`);
+		const path = `/payments/deposit/${encodeURIComponent(network)}`;
+		return parseDeposit(`GET ${path}`, fields(`GET ${path}`, await this.#request('GET', path)));
 	}
 
 	/** @param {string} method @param {string} path @param {unknown} [body] @param {boolean} [auth] */
@@ -133,7 +141,11 @@ export class Api {
 		} catch {
 			// not JSON: keep the status text
 		}
-		const text = [`${method} ${path}:`, res.status, code, message].filter(Boolean).join(' ');
+		// The request id is what support asks for.
+		const requestId = res.headers.get('x-request-id');
+		const text = [`${method} ${path}:`, res.status, code, message, requestId && `(request ${requestId})`]
+			.filter(Boolean)
+			.join(' ');
 		// 429 means slow down, not give up.
 		throw new ApiError(text, {
 			status: res.status,
@@ -141,6 +153,72 @@ export class Api {
 			transient: res.status >= 500 || res.status === 429
 		});
 	}
+}
+
+/** @typedef {Record<string, unknown>} Fields */
+
+/**
+ * A 2xx answer that is not the documented one is a glitch: tried again later, never read as a payment.
+ * @param {string} what @param {string} field
+ */
+function unexpected(what, field) {
+	return new ApiError(`${what}: unexpected response: no usable ${field}`, { status: 200, transient: true });
+}
+
+/** @param {string} what @param {unknown} value @returns {Fields} */
+function fields(what, value) {
+	if (typeof value !== 'object' || value === null) throw unexpected(what, 'object');
+	return /** @type {Fields} */ (value);
+}
+
+/** @param {string} what @param {Fields} raw @param {string} name @returns {string} */
+function text(what, raw, name) {
+	const value = raw[name];
+	if (typeof value !== 'string') throw unexpected(what, name);
+	return value;
+}
+
+/** @param {string} what @param {Fields} raw @param {string} name @returns {number} */
+function number(what, raw, name) {
+	const value = raw[name];
+	if (typeof value !== 'number' || !Number.isFinite(value)) throw unexpected(what, name);
+	return value;
+}
+
+/**
+ * The API names its fields in snake_case and gives times in seconds.
+ * @param {string} what @param {Fields} raw @returns {Invoice}
+ */
+function parseInvoice(what, raw) {
+	return {
+		kind: 'invoice',
+		id: text(what, raw, 'id'),
+		coin: text(what, raw, 'coin'),
+		network: text(what, raw, 'network'),
+		amountUsd: number(what, raw, 'amount_usd'),
+		amountCrypto: text(what, raw, 'amount_crypto'),
+		address: text(what, raw, 'address'),
+		createdAt: number(what, raw, 'created_at') * 1000,
+		expiresAt: number(what, raw, 'expires_at') * 1000,
+		status: text(what, raw, 'status')
+	};
+}
+
+/** @param {string} what @param {Fields} raw @returns {Deposit} */
+function parseDeposit(what, raw) {
+	const { coins, deposits = [] } = raw;
+	if (!Array.isArray(coins) || !coins.every((c) => typeof c === 'string')) throw unexpected(what, 'coins');
+	if (!Array.isArray(deposits)) throw unexpected(what, 'deposits');
+	return {
+		kind: 'deposit',
+		network: text(what, raw, 'network'),
+		coins,
+		address: text(what, raw, 'address'),
+		deposits: deposits.map((d) => {
+			const entry = fields(what, d);
+			return { txHash: text(what, entry, 'tx_hash'), credited: entry.credited === true };
+		})
+	};
 }
 
 /** @param {unknown} err */

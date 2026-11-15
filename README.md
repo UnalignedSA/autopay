@@ -37,6 +37,12 @@ behaviour and the same state file. Run one as it is, or copy the parts you need 
 | [`go/`](go) | Go | Go 1.25+ | `go build -o autopay ./cmd/autopay && ./autopay watch` |
 | [`rust/`](rust) | Rust | Rust 1.98.1+ | `cargo build --release && ./target/release/autopay watch` |
 
+> [!IMPORTANT]
+> **2.0.0.** The API's payment fields are now snake_case (`amount_usd`, `amount_crypto`, `expires_at`,
+> `tx_hash`) with times in seconds, and `GET /payments/methods` answers `{"methods": [...]}`. Autopay 1.x no
+> longer works against the API: it stops or retries at start and pays nothing. Upgrade to 2.0.0. State
+> files are compatible: keep yours as it is.
+
 ## Quick start
 
 1. **Create an API key** for the account to top up on [unaligned.pw](https://unaligned.pw).
@@ -245,6 +251,8 @@ moved. It will not guess. Stop it, look, edit the state file, start it again.
 ```
 
 - `phase` goes `created`, `sending`, `sent`, `done`.
+- The field names are the program's own and every time is in milliseconds since 1970, whatever the API's
+  own names and units are. A file written by 1.x is read as it is by 2.0.0.
 - For a deposit, `id` is `deposit:pending` until the transaction id is known, then `deposit:<txid>`.
 - `result` is the final status: `paid`, `expired`, `refunded`, `credited` or `failed`.
 - Every field of every record is checked. If the file cannot be read or parsed, the program refuses to
@@ -272,7 +280,7 @@ These choices are the same in every language. Only the `.env` readers differ (se
   counts from `sentAt`. A hand-edited record without it (one with a `txid`, or in `sending` or `sent`)
   counts from `createdAt`.
 - **The payment must match the request.** Before anything is sent, the coin and network of the answer
-  must be the configured ones, and an invoice's `amountUsd` must equal `TOPUP_USD`. Otherwise the program
+  must be the configured ones, and an invoice's `amount_usd` must equal `TOPUP_USD`. Otherwise the program
   stops with exit `1`, sends nothing and records nothing.
 - **A resumed invoice must match too.** An invoice that was created but not sent (the program stopped in
   between) is only paid if its coin and network are still the configured ones. If you changed `NETWORK` or

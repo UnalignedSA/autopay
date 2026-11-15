@@ -11,6 +11,35 @@ from autopay.api import Api, ApiError, Deposit, Invoice
 
 last_auth: list[str | None] = []
 
+#: What the API answers: snake_case, seconds.
+INVOICE = {
+    "kind": "invoice",
+    "id": "inv-1",
+    "coin": "USDT",
+    "network": "bsc",
+    "amount_usd": 50,
+    "amount_crypto": "50.00",
+    "address": "0xa",
+    "created_at": 1793925000,
+    "expires_at": 1793926800,
+    "required_confirmations": 15,
+    "status": "waiting",
+    "payments": [],
+}
+#: The same invoice with the field names and milliseconds of the API before 2.0.
+OLD_INVOICE = {
+    "kind": "invoice",
+    "id": "inv-1",
+    "coin": "USDT",
+    "network": "bsc",
+    "amountUsd": 50,
+    "amountCrypto": "50.00",
+    "address": "0xa",
+    "createdAt": 1793925000000,
+    "expiresAt": 1793926800000,
+    "status": "waiting",
+}
+
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
@@ -30,39 +59,36 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/balance":
             self.reply(200, '{"balance": 12.5}')
         elif path == "/payments/methods":
-            self.reply(200, '[{"coin":"USDT","network":"bsc","kind":"invoice","min_usd":5,"max_usd":null}]')
+            self.reply(
+                200,
+                '{"methods":[{"coin":"USDT","network":"bsc","kind":"invoice","min_usd":5,"max_usd":null,'
+                '"rate_usd":1,"confirmations":15}]}',
+            )
+        elif path.endswith("/full"):
+            self.reply(409, '{"error":{"code":"limit_reached","message":"too many open"}}')
         elif path.endswith("/limited"):
             self.reply(429, '{"error":{"code":"rate_limited","message":"slow"}}')
         elif path.startswith("/payments/deposit/"):
             self.reply(
                 200,
                 '{"kind":"deposit","network":"solana","coins":["USDT"],"address":"A",'
-                '"deposits":[{"txHash":"t","credited":true}]}',
+                '"min_usd":1,"required_confirmations":1,"deposits":[{"coin":"USDT","amount":"5","usd":5,'
+                '"tx_hash":"t","at":1793925000,"confirmations":3,"credited":true}]}',
             )
         elif path.startswith("/payments/inv-1"):
-            self.reply(
-                200,
-                json.dumps(
-                    {
-                        "kind": "invoice",
-                        "id": "inv-1",
-                        "coin": "USDT",
-                        "network": "bsc",
-                        "amountUsd": 50,
-                        "amountCrypto": "50.00",
-                        "address": "0xa",
-                        "createdAt": 1,
-                        "expiresAt": 2,
-                        "status": "waiting",
-                    }
-                ),
-            )
+            self.reply(200, json.dumps(INVOICE))
         else:
-            self.reply(400, '{"error":{"code":"invalid_input","message":"nope"}}')
+            self.reply(
+                400,
+                '{"error":{"code":"invalid_request","message":"nope","request_id":"req_1"}}',
+                {"X-Request-Id": "req_1"},
+            )
 
-    def reply(self, status: int, body: str) -> None:
+    def reply(self, status: int, body: str, headers: dict[str, str] | None = None) -> None:
         data = body.encode()
         self.send_response(status)
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
@@ -112,13 +138,19 @@ def test_methods_is_public_no_authorization_header(base: str) -> None:
     assert methods[0].max_usd is None
 
 
-def test_a_400_carries_the_api_error_code_and_is_not_transient(base: str) -> None:
+def test_a_400_carries_the_api_error_code_and_the_request_id_and_is_not_transient(base: str) -> None:
     with pytest.raises(ApiError) as err:
         Api(base, "k").get_payment("bad")
     assert err.value.status == 400
-    assert err.value.code == "invalid_input"
+    assert err.value.code == "invalid_request"
     assert not err.value.transient
-    assert "nope" in str(err.value)
+    assert str(err.value) == "GET /payments/bad: 400 invalid_request nope (request req_1)"
+
+
+def test_a_409_too_many_open_invoices_is_not_transient(base: str) -> None:
+    with pytest.raises(ApiError) as err:
+        Api(base, "k").get_payment("full")
+    assert (err.value.status, err.value.code, err.value.transient) == (409, "limit_reached", False)
 
 
 def test_a_429_is_transient(base: str) -> None:
@@ -144,10 +176,28 @@ def test_a_balance_that_is_not_a_finite_number_is_a_transient_error(answer: str)
     assert err.value.transient
 
 
-@pytest.mark.parametrize("answer", ["[]", "null", "{}", '{"kind":"deposit"}'])
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "[]",
+        "null",
+        "{}",
+        '{"kind":"deposit"}',
+        json.dumps(OLD_INVOICE),
+        json.dumps(INVOICE | {"expires_at": "1793926800"}),
+        json.dumps(INVOICE | {"created_at": None}),
+    ],
+)
 def test_a_malformed_payment_answer_is_a_transient_error(answer: str) -> None:
     with serve(answer) as base, pytest.raises(ApiError) as err:
         Api(base, "k").create_payment({})
+    assert err.value.transient
+
+
+@pytest.mark.parametrize("answer", ["[]", "null", "{}", '{"methods":null}', '{"methods":[{"coin":"USDT"}]}'])
+def test_a_malformed_methods_answer_is_a_transient_error(answer: str) -> None:
+    with serve(answer) as base, pytest.raises(ApiError) as err:
+        Api(base, "k").methods()
     assert err.value.transient
 
 
@@ -167,6 +217,8 @@ def test_answers_are_parsed_into_objects(base: str) -> None:
         "50.00",
         "waiting",
     )
+    # The API's seconds become the program's milliseconds.
+    assert (invoice.created_at, invoice.expires_at) == (1793925000000, 1793926800000)
     deposit = api.deposit("solana")
     assert isinstance(deposit, Deposit)
     assert deposit.deposits[0].tx_hash == "t"

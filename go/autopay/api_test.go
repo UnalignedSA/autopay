@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -30,22 +31,38 @@ func apiServer(t *testing.T) (base string, lastAuth func() string) {
 			w.(http.Flusher).Flush()
 			panic(http.ErrAbortHandler)
 		case strings.HasPrefix(path, "/odd/"):
-			// A 2xx body without a usable balance.
+			// A 2xx body that is not the documented answer.
 			bodies := map[string]string{
 				"/odd/empty/balance": `{}`, "/odd/null/balance": `null`,
 				"/odd/text/balance": `{"balance":"12.5"}`, "/odd/infinite/balance": `{"balance":1e999}`,
+				"/odd/bare/payments/methods": `[]`, "/odd/null/payments/methods": `null`,
+				"/odd/empty/payments/methods": `{}`,
 			}
 			_, _ = w.Write([]byte(bodies[path]))
 		case path == "/balance":
 			_, _ = w.Write([]byte(`{"balance": 12.5}`))
 		case path == "/payments/methods":
-			_, _ = w.Write([]byte(`[{"coin":"USDT","network":"bsc","kind":"invoice","min_usd":5.0,"max_usd":50000.0}]`))
+			_, _ = w.Write([]byte(`{"methods":[{"coin":"USDT","network":"bsc","kind":"invoice","min_usd":5.0,` +
+				`"max_usd":50000.0,"rate_usd":1.0,"confirmations":15}]}`))
+		case path == "/payments/inv-1" || path == "/payments":
+			// What the API answers: snake_case, seconds.
+			_, _ = w.Write([]byte(`{"kind":"invoice","id":"inv-1","coin":"USDT","network":"bsc","amount_usd":50.0,` +
+				`"amount_crypto":"50.00","address":"0xa","created_at":1793925000,"expires_at":1793926800,` +
+				`"required_confirmations":15,"status":"waiting","payments":[]}`))
+		case path == "/payments/deposit/solana":
+			_, _ = w.Write([]byte(`{"kind":"deposit","network":"solana","coins":["USDT","USDC"],"address":"A",` +
+				`"min_usd":1.0,"required_confirmations":1,"deposits":[{"coin":"USDT","amount":"5","usd":5.0,` +
+				`"tx_hash":"t1","at":1793925000,"confirmations":3,"credited":true}]}`))
+		case strings.HasSuffix(path, "/full"):
+			w.WriteHeader(http.StatusConflict)
+			_, _ = w.Write([]byte(`{"error":{"code":"limit_reached","message":"too many open"}}`))
 		case strings.HasSuffix(path, "/limited"):
 			w.WriteHeader(http.StatusTooManyRequests)
 			_, _ = w.Write([]byte(`{"error":{"code":"rate_limited","message":"slow"}}`))
 		default:
+			w.Header().Set("X-Request-Id", "req_1")
 			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(`{"error":{"code":"invalid_input","message":"nope"}}`))
+			_, _ = w.Write([]byte(`{"error":{"code":"invalid_request","message":"nope","request_id":"req_1"}}`))
 		}
 	}))
 	t.Cleanup(srv.Close)
@@ -86,11 +103,63 @@ func TestMethodsIsPublicNoAuthorizationHeader(t *testing.T) {
 	}
 }
 
-func TestA400CarriesTheAPIErrorCodeAndIsNotTransient(t *testing.T) {
+func TestAnInvoiceIsReadFromSnakeCaseItsSecondsBecomeMilliseconds(t *testing.T) {
+	base, _ := apiServer(t)
+	want := Invoice{
+		Kind: "invoice", ID: "inv-1", Coin: "USDT", Network: "bsc", AmountUSD: 50, AmountCrypto: "50.00",
+		Address: "0xa", CreatedAt: 1793925000000, ExpiresAt: 1793926800000, Status: "waiting",
+	}
+	api := NewAPI(base, "k")
+	if got, err := api.GetPayment(context.Background(), "inv-1"); err != nil || got != want {
+		t.Errorf("GetPayment = %+v, %v", got, err)
+	}
+	got, err := api.CreateInvoice(context.Background(), CreateRequest{AmountUSD: 50, Coin: "USDT", Network: "bsc"})
+	if err != nil || got != want {
+		t.Errorf("CreateInvoice = %+v, %v", got, err)
+	}
+}
+
+func TestADepositAddressIsReadWithItsDepositsByTxHash(t *testing.T) {
+	base, _ := apiServer(t)
+	deposit, err := NewAPI(base, "k").Deposit(context.Background(), "solana")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deposit.Network != "solana" || deposit.Address != "A" || !slices.Equal(deposit.Coins, []string{"USDT", "USDC"}) ||
+		!slices.Equal(deposit.Deposits, []DepositEntry{{TxHash: "t1", Credited: true}}) {
+		t.Errorf("deposit = %+v", deposit)
+	}
+}
+
+func TestA2xxMethodsAnswerWithoutAListIsATransientError(t *testing.T) {
+	base, _ := apiServer(t)
+	for _, odd := range []string{"bare", "null", "empty"} {
+		_, err := NewAPI(base+"/odd/"+odd, "k").Methods(context.Background())
+		if err == nil {
+			t.Errorf("%s: no error", odd)
+			continue
+		}
+		if apiErr := asAPIError(t, err); !apiErr.Transient {
+			t.Errorf("%s: not transient: %v", odd, err)
+		}
+	}
+}
+
+func TestA400CarriesTheAPIErrorCodeAndTheRequestIDAndIsNotTransient(t *testing.T) {
 	base, _ := apiServer(t)
 	_, err := NewAPI(base, "k").Deposit(context.Background(), "x")
 	apiErr := asAPIError(t, err)
-	if apiErr.Status != 400 || apiErr.Code != "invalid_input" || apiErr.Transient || !strings.Contains(apiErr.Error(), "nope") {
+	if apiErr.Status != 400 || apiErr.Code != "invalid_request" || apiErr.Transient ||
+		apiErr.Error() != "GET /payments/deposit/x: 400 invalid_request nope (request req_1)" {
+		t.Errorf("unexpected error: %+v", apiErr)
+	}
+}
+
+func TestA409TooManyOpenInvoicesIsNotTransient(t *testing.T) {
+	base, _ := apiServer(t)
+	_, err := NewAPI(base, "k").GetPayment(context.Background(), "full")
+	apiErr := asAPIError(t, err)
+	if apiErr.Status != 409 || apiErr.Code != "limit_reached" || apiErr.Transient {
 		t.Errorf("unexpected error: %+v", apiErr)
 	}
 }
