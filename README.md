@@ -40,8 +40,9 @@ behaviour and the same state file. Run one as it is, or copy the parts you need 
 > [!IMPORTANT]
 > **2.0.0.** The API's payment fields are now snake_case (`amount_usd`, `amount_crypto`, `expires_at`,
 > `tx_hash`) with times in seconds, and `GET /payments/methods` answers `{"methods": [...]}`. Autopay 1.x no
-> longer works against the API: it stops or retries at start and pays nothing. Upgrade to 2.0.0. State
-> files are compatible: keep yours as it is.
+> longer works against the API and pays nothing. The TypeScript and JavaScript 1.x programs stop with an
+> error at start; the Python, Go and Rust ones keep retrying without an error exit, so the balance silently
+> stops being topped up. Upgrade to 2.0.0. State files are compatible: keep yours as it is.
 
 ## Quick start
 

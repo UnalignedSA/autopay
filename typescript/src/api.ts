@@ -160,6 +160,13 @@ function number(what: string, raw: Fields, name: string): number {
 	return value;
 }
 
+/** A time of the API, in whole seconds since 1970, as the program's milliseconds. */
+function milliseconds(what: string, raw: Fields, name: string): number {
+	const value = raw[name];
+	if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) throw unexpected(what, name);
+	return value * 1000;
+}
+
 /** The API names its fields in snake_case and gives times in seconds. */
 function parseInvoice(what: string, raw: Fields): Invoice {
 	return {
@@ -170,8 +177,8 @@ function parseInvoice(what: string, raw: Fields): Invoice {
 		amountUsd: number(what, raw, 'amount_usd'),
 		amountCrypto: text(what, raw, 'amount_crypto'),
 		address: text(what, raw, 'address'),
-		createdAt: number(what, raw, 'created_at') * 1000,
-		expiresAt: number(what, raw, 'expires_at') * 1000,
+		createdAt: milliseconds(what, raw, 'created_at'),
+		expiresAt: milliseconds(what, raw, 'expires_at'),
 		status: text(what, raw, 'status')
 	};
 }

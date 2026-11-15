@@ -124,10 +124,33 @@ func (c *Client) CreateInvoice(ctx context.Context, req CreateRequest) (Invoice,
 // invoice reads an invoice and turns the API's seconds into milliseconds.
 func (c *Client) invoice(ctx context.Context, method, path string, body any) (Invoice, error) {
 	var invoice Invoice
-	err := c.request(ctx, method, path, body, true, &invoice)
+	if err := c.request(ctx, method, path, body, true, &invoice); err != nil {
+		return Invoice{}, err
+	}
+	// A 2xx without what is needed to pay and follow the invoice is a glitch, never an invoice.
+	missing := ""
+	switch {
+	case invoice.ID == "":
+		missing = "id"
+	case invoice.AmountCrypto == "":
+		missing = "amount_crypto"
+	case invoice.Address == "":
+		missing = "address"
+	case invoice.Status == "":
+		missing = "status"
+	case invoice.ExpiresAt <= 0:
+		missing = "expires_at"
+	}
+	if missing != "" {
+		return Invoice{}, &APIError{
+			Status:    http.StatusOK,
+			Message:   fmt.Sprintf("%s %s: unreadable response: no usable %s", method, path, missing),
+			Transient: true,
+		}
+	}
 	invoice.CreatedAt *= 1000
 	invoice.ExpiresAt *= 1000
-	return invoice, err
+	return invoice, nil
 }
 
 // CreateDeposit answers 200 with the account's fixed deposit address.

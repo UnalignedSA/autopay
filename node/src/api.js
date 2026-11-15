@@ -186,6 +186,16 @@ function number(what, raw, name) {
 }
 
 /**
+ * A time of the API, in whole seconds since 1970, as the program's milliseconds.
+ * @param {string} what @param {Fields} raw @param {string} name @returns {number}
+ */
+function milliseconds(what, raw, name) {
+	const value = raw[name];
+	if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) throw unexpected(what, name);
+	return value * 1000;
+}
+
+/**
  * The API names its fields in snake_case and gives times in seconds.
  * @param {string} what @param {Fields} raw @returns {Invoice}
  */
@@ -198,8 +208,8 @@ function parseInvoice(what, raw) {
 		amountUsd: number(what, raw, 'amount_usd'),
 		amountCrypto: text(what, raw, 'amount_crypto'),
 		address: text(what, raw, 'address'),
-		createdAt: number(what, raw, 'created_at') * 1000,
-		expiresAt: number(what, raw, 'expires_at') * 1000,
+		createdAt: milliseconds(what, raw, 'created_at'),
+		expiresAt: milliseconds(what, raw, 'expires_at'),
 		status: text(what, raw, 'status')
 	};
 }

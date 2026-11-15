@@ -1,5 +1,13 @@
 Keeps an [Unaligned](https://unaligned.pw) balance topped up, in crypto, with no one watching. See the [README](https://github.com/UnalignedSA/autopay#readme) for setup and safety.
 
+## 2.0.0
+
+The API's payment fields are now snake_case (`amount_usd`, `amount_crypto`, `expires_at`, `tx_hash`) with times in seconds, and `GET /payments/methods` answers `{"methods": [...]}`. Autopay 1.x no longer works against the API: upgrade.
+
+1.x pays nothing in that state, but it does not always say so. The TypeScript and JavaScript 1.x programs stop with an error at start. The Python, Go and Rust 1.x programs log a `retry:` line and keep retrying without an error exit, so the balance silently stops being topped up.
+
+State files are compatible: keep yours as it is, there is nothing to migrate.
+
 ## Downloads
 
 | You want | Download |

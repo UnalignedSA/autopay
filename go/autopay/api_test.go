@@ -2,7 +2,9 @@ package autopay
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -200,6 +202,78 @@ func TestA2xxBalanceWithoutAFiniteNumberIsATransientError(t *testing.T) {
 		}
 		if apiErr := asAPIError(t, err); !apiErr.Transient {
 			t.Errorf("%s: not transient: %v", odd, err)
+		}
+	}
+}
+
+func TestAnIncompleteInvoiceIsATransientErrorNeverAnInvoice(t *testing.T) {
+	complete := map[string]any{
+		"kind": "invoice", "id": "inv-1", "coin": "USDT", "network": "bsc", "amount_usd": 50.0,
+		"amount_crypto": "50.00", "address": "0xa", "created_at": 1793925000, "expires_at": 1793926800,
+		"status": "waiting",
+	}
+	without := func(field string) map[string]any {
+		body := maps.Clone(complete)
+		delete(body, field)
+		return body
+	}
+	with := func(field string, value any) map[string]any {
+		body := maps.Clone(complete)
+		body[field] = value
+		return body
+	}
+	cases := []struct {
+		name string
+		body any
+		ok   bool
+	}{
+		{"complete", complete, true},
+		{"no id", without("id"), false},
+		{"empty id", with("id", ""), false},
+		{"no amount_crypto", without("amount_crypto"), false},
+		{"empty amount_crypto", with("amount_crypto", ""), false},
+		{"no address", without("address"), false},
+		{"empty address", with("address", ""), false},
+		{"no status", without("status"), false},
+		{"empty status", with("status", ""), false},
+		{"no expires_at", without("expires_at"), false},
+		{"zero expires_at", with("expires_at", 0), false},
+		{"negative expires_at", with("expires_at", -1), false},
+		{"null", nil, false},
+		{"empty object", map[string]any{}, false},
+	}
+	for _, c := range cases {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			if r.Method == http.MethodPost {
+				w.WriteHeader(http.StatusCreated)
+			}
+			_ = json.NewEncoder(w).Encode(c.body)
+		}))
+		api := NewAPI(srv.URL, "k")
+		read, readErr := api.GetPayment(context.Background(), "inv-1")
+		created, createErr := api.CreateInvoice(context.Background(), CreateRequest{AmountUSD: 50, Coin: "USDT", Network: "bsc"})
+		srv.Close()
+		for call, got := range map[string]struct {
+			invoice Invoice
+			err     error
+		}{"GetPayment": {read, readErr}, "CreateInvoice": {created, createErr}} {
+			if c.ok {
+				if got.err != nil || got.invoice.ID != "inv-1" || got.invoice.ExpiresAt != 1793926800000 {
+					t.Errorf("%s, %s = %+v, %v", c.name, call, got.invoice, got.err)
+				}
+				continue
+			}
+			if got.err == nil {
+				t.Errorf("%s, %s: no error, invoice %+v", c.name, call, got.invoice)
+				continue
+			}
+			if apiErr := asAPIError(t, got.err); !apiErr.Transient || !strings.Contains(apiErr.Message, "unreadable response") {
+				t.Errorf("%s, %s: not a transient unreadable response: %v", c.name, call, got.err)
+			}
+			if got.invoice != (Invoice{}) {
+				t.Errorf("%s, %s: an invoice came with the error: %+v", c.name, call, got.invoice)
+			}
 		}
 	}
 }

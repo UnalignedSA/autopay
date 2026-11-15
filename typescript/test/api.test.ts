@@ -56,6 +56,7 @@ before(async () => {
 				'/odd/infinite/balance': '{"balance":1e999}',
 				'/odd/bare/payments/methods': '[]',
 				'/odd/null/payments/methods': 'null',
+				'/odd/empty/payments/methods': '{}',
 				// The field names and milliseconds of the API before 2.0.
 				'/odd/old/payments/inv-1': JSON.stringify({
 					...invoice,
@@ -66,6 +67,11 @@ before(async () => {
 					expiresAt: 1793926800000
 				}),
 				'/odd/text/payments/inv-1': JSON.stringify({ ...invoice, expires_at: '1793926800' }),
+				// Without its expiry an invoice would be kept as one that never expires.
+				'/odd/endless/payments/inv-1': JSON.stringify({ ...invoice, expires_at: undefined }),
+				'/odd/fraction/payments/inv-1': JSON.stringify({ ...invoice, expires_at: 1.5 }),
+				'/odd/zero/payments/inv-1': JSON.stringify({ ...invoice, expires_at: 0 }),
+				'/odd/unborn/payments/inv-1': JSON.stringify({ ...invoice, created_at: 1793925000.5 }),
 				'/odd/null/payments/inv-1': 'null'
 			};
 			res.writeHead(200, { 'Content-Type': 'application/json' }).end(bodies[path] ?? '');
@@ -148,14 +154,14 @@ test('a deposit address is read with its deposits by tx_hash', async () => {
 });
 
 test('a 2xx answer in another shape is a transient error, never a payment', async () => {
-	for (const odd of ['old', 'text', 'null']) {
+	for (const odd of ['old', 'text', 'null', 'endless', 'fraction', 'zero', 'unborn']) {
 		await assert.rejects(
 			new Api(`${base}/odd/${odd}`, 'k').getPayment('inv-1'),
 			(err: ApiError) => err instanceof ApiError && err.transient && /unexpected response/.test(err.message),
 			odd
 		);
 	}
-	for (const odd of ['bare', 'null']) {
+	for (const odd of ['bare', 'null', 'empty']) {
 		await assert.rejects(
 			new Api(`${base}/odd/${odd}`, 'k').methods(),
 			(err: ApiError) => err instanceof ApiError && err.transient,
